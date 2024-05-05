@@ -1,0 +1,18 @@
+{
+    "files.associations": {
+        "event-config.h": "c",
+        "stdlib.h": "c",
+        "logger.h": "c",
+        "server.h": "c",
+        "stdbool.h": "c",
+        "listener.h": "c",
+        "socket.h": "c",
+        "utilities.h": "c",
+        "un.h": "c",
+        "event.h": "c",
+        "stddef.h": "c",
+        "err.h": "c",
+        "stdio.h": "c"
+    },
+    "C_Cpp.errorSquiggles": "enabled"
+}
