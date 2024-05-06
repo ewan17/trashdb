@@ -7,8 +7,6 @@
 // first 4 bytes are the message length
 #define TRASH_MSG_LEN 4
 
-#include <stdbool.h>
-
 bool msg_len_valid(uint32_t len);
 
 #endif //PROTOCOL_H

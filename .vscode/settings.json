@@ -16,7 +16,9 @@
         "lmdb.h": "c",
         "pthread.h": "c",
         "errno.h": "c",
-        "message.h": "c"
+        "message.h": "c",
+        "kiddiepool.h": "c",
+        "global.h": "c"
     },
     "C_Cpp.errorSquiggles": "enabled"
 }

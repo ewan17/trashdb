@@ -11,7 +11,7 @@
 
 #include "global.h"
 
-static struct List listeners;
+INIT_LIST(listeners);
 
 struct Listener {
     struct IList il;
@@ -41,9 +41,7 @@ void run_server() {
  * @todo    change parameters
  * @todo    make void method calls, do not make them return ints
 */
-int init_server(sa_family_t sockFam, const char *hostname, char *port, int isSockAbstract) {
-    INIT_LIST(&listeners);
-
+int init_server(sa_family_t sockFam, const char *hostname, char *port, bool isSockAbstract) {
     if(init_server_sock(sockFam, hostname, port, isSockAbstract) != 0) {
         return TRASH_ERROR;
     }

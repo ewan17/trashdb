@@ -41,17 +41,12 @@ void ilist_append(struct IList *list, struct IList *item);
 struct IList *ilist_remove(struct IList *list);
 
 #define INIT_ILIST(ilist) \
-    do { \
-        (ilist).next = &(ilist); \
-        (ilist).prev = &(ilist); \
-    } while (0)
+    ilist = { &(ilist), &(ilist) } \
 
 #define RESET_ILIST(ilist) ilist->next = ilist->prev = ilist; 
 
-#define INIT_LIST(list) do {\
-    INIT_ILIST((list)->head); \
-    (list)->count = 0; \
-} while(0)
+#define INIT_LIST(list) \
+    list = {{&(list).head, &(list).head} , 0} \
 
 #define CONTAINER_OF(ptr, type, member) ((type *)((char *)(ptr) - offsetof(type, member)))
 

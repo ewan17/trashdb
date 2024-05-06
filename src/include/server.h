@@ -11,6 +11,6 @@
 
 void run_server();
 void kill_server();
-int init_server(sa_family_t sockFam, const char *hostname, char *port, int isSockAbstract);
+int init_server(sa_family_t sockFam, const char *hostname, char *port, bool isSockAbstract);
 
 #endif //SERVER_H

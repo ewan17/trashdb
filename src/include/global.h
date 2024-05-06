@@ -18,32 +18,7 @@
 #define TRASH_ERROR (-1)
 #define TRASH_EOF (-2)
 
-#define DB_SIZE 10485760
-
-/**
- * @note    this needs fixing
-*/
-#define TRASH_PATH "../../../var/local/trashdb/"
-
-#define LOG_DIR TRASH_PATH "logs/"
-
-#define DB_DIR TRASH_PATH "data/"
-
-/**
- * @note    this will change later
-*/
-#define MAX_DBS 1
-
 extern struct event_base *serverBase;
 extern pthread_mutex_t base_mutex;
-
-typedef struct Settings {
-    const char *path;
-    char *port;
-    
-    size_t db_size;
-    size_t num_dbs;
-    size_t num_threads; 
-} Settings;
 
 #endif //GLOBAL_H
