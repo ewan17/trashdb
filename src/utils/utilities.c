@@ -5,7 +5,6 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include <event2/util.h>
 
 #include "utilities.h"
 
@@ -18,7 +17,7 @@ void *trash_realloc(void *ptr, size_t needed) {
     return newPtr;
 }
 
-bool sock_buff_size(evutil_socket_t sock, int send_buffy_size, int recv_buffy_size) {
+bool sock_buff_size(int sock, int send_buffy_size, int recv_buffy_size) {
     if(setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &send_buffy_size, sizeof(send_buffy_size)) != 0) {
         return false;
     }
@@ -29,7 +28,7 @@ bool sock_buff_size(evutil_socket_t sock, int send_buffy_size, int recv_buffy_si
     return true;
 }
 
-bool keep_sock_alive(evutil_socket_t sock, int alive, int idle, int interval, int maxpkt) {
+bool keep_sock_alive(int sock, int alive, int idle, int interval, int maxpkt) {
 #ifdef SO_KEEPALIVE    
     if(setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &alive, sizeof(alive)) != 0) {
         return false;
@@ -53,7 +52,7 @@ bool keep_sock_alive(evutil_socket_t sock, int alive, int idle, int interval, in
     return true;
 }
 
-int opt_sock(evutil_socket_t sock, bool isUnixSock) {
+int opt_sock(int sock, bool isUnixSock) {
     if(evutil_make_socket_nonblocking(sock) != 0) {
         return 1;
     }   

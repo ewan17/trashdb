@@ -6,13 +6,11 @@
 #define KEEP_INTERVAL   2
 #define KEEP_COUNT  10
 
-#define DEFAULT_PORT 50000
-
 void *trash_realloc(void *sendBuff, size_t needed);
 
-bool sock_buff_size(evutil_socket_t sock, int send_buffy_size, int recv_buffy_size);
-bool keep_sock_alive(evutil_socket_t sock, int alive, int idle, int interval, int maxpkt);
-int opt_sock(evutil_socket_t sock, bool isUnixSock);
+bool sock_buff_size(int sock, int send_buffy_size, int recv_buffy_size);
+bool keep_sock_alive(int sock, int alive, int idle, int interval, int maxpkt);
+int opt_sock(int sock, bool isUnixSock);
 
 struct TrashAddr {
     struct sockaddr_storage addr;

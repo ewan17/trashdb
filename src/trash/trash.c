@@ -1,16 +1,8 @@
 #include "db.h"
 #include "pool/kiddiepool.h"
-#include "nettwerk/server.h"
 #include "../log/logger.h"
 
-#define TRASH_PATH "../../../var/local/trashdb/"
-#define DEFAULT_DATABASE_DIR TRASH_PATH "data/"
-#define DEFAULT_LOG_DIR TRASH_PATH "logs/"
-
-#define MAX_DIR_SIZE 1024
-#define DEFAULT_DB_SIZE 10485760
-#define DEFAULT_READERS 126
-#define MAX_DBS 1
+#include "global.h"
 
 static int init_trashdb(TrashDB **trashDb, MDB_env *env, const char *path, char *port, size_t num_threads);
 static int db_file(char *path);
@@ -73,7 +65,6 @@ static int init_trashdb(TrashDB **db, MDB_env *env, const char *path, char *port
     tmp->env = env;
     tmp->logger = logger;
     tmp->pool = pool;
-    tmp->nettwerk = NULL;
 
     if(init_server(db) != 0) {
         return -1;
@@ -95,17 +86,10 @@ static int db_file(char *path) {
     char dir[MAX_DIR_SIZE];
     char *path_separator;
 
-    #ifdef _WIN32
-        if(_getcwd(dir, MAX_DIR_SIZE) == NULL) {
-            return -1;
-        };
-        path_separator = "\\";
-    #else
-        if(getcwd(dir, MAX_DIR_SIZE) == NULL) {
-            return -1;
-        };
-        path_separator = "/";
-    #endif
+    if(getcwd(dir, MAX_DIR_SIZE) == NULL) {
+        return -1;
+    };
+    path_separator = "/";
 
     int i;
     for(i = strlen(dir); i >= 0; i--) {
@@ -123,10 +107,6 @@ static int db_file(char *path) {
         dir[i+j] = '\0';
     }
 
-    #ifdef _WIN32
-        return _mkdir(dir);
-    #else
-        return mkdir(dir);
-    #endif
+    return mkdir(dir);
 };
 

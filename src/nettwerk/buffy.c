@@ -1,15 +1,9 @@
 #include <string.h>
 #include <stddef.h>
 #include <arpa/inet.h>
-#include <event2/event.h>
-#include <event2/bufferevent.h>
-#include <event2/buffer.h>
 #include <event2/bufferevent_ssl.h>
 
-#include "../trash/global.h"
-#include "protocol.h"
-#include "utilities.h"
-#include "buffy.h"
+#include "global.h"
 
 static void close_client_internal(TrashData *td);
 static void buffer_read_cb(evutil_socket_t sock, short flags, void *arg);
@@ -183,7 +177,7 @@ get_more_data:
         td->remainingPacket -= availBytes;
     } else {
         uint32_t len;
-        if(availBytes < PACKET_LEN) {
+        if(availBytes < TRASH_MSG_LEN) {
             goto get_more_data;
         }
         // get the length of the packet
@@ -192,7 +186,7 @@ get_more_data:
         len = ntohl(len);
         len -= 4;
 
-        if(!pkt_len_valid(len)) {
+        if(!msg_len_valid(len)) {
             /**
              * @note    needs fixing
             */
@@ -216,6 +210,11 @@ get_more_data:
     }
 
     /**
+     * @note    echo server for now
+    */
+    data_send(td);
+
+    /**
      * @note    where we will send the pkt to the running threads to handle the parsing and the db work
     */
     // send message to threads
@@ -227,11 +226,16 @@ static void buffer_write_cb(evutil_socket_t sock, short flags, void *arg) {
     
     int rc = flush_data(td->fd, td->sendBuff, td->sendBuffSize, &td->sendBuffPtr, &td->sendBuffLen);
     if(rc != TRASH_SUCCESS) {
-        // handle error
+        /**
+         * @todo    handle error
+        */
     }
 
-    td->sendBuffSize = SEND_BUFFY_SIZE;
-    
+    // set the send buffer size back to default size
+    if(td->sendBuffSize != SEND_BUFFY_SIZE) {
+        td->sendBuffSize = SEND_BUFFY_SIZE;
+        trash_realloc(td->sendBuff, SEND_BUFFY_SIZE);
+    }
 };
 
 /* ---------- SEND & RECV FUNCTIONALITY ---------- */
@@ -261,12 +265,11 @@ static int get_bytes_from_kernel(evutil_socket_t fd, char *buff, uint32_t buffLe
             }
             return TRASH_ERROR;
         } else if(len == 0) {
-            return EOF;
+            return TRASH_EOF;
         }
         *endPtr += len;
         return TRASH_SUCCESS;
     }
-
 }
 
 /**
@@ -310,7 +313,7 @@ static int flush_data(evutil_socket_t fd, char *buff, size_t buffLen, size_t *st
             }
             return TRASH_ERROR;
         } else if(rc == 0) {
-            return EOF;
+            return TRASH_EOF;
         }
 
         len += rc;

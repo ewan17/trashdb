@@ -1,8 +1,6 @@
 #ifndef SERVER_H
 #define SERVER_H
 
-#include "../trash/global.h"
-
 #define DEFAULT_BACK_LOG 100
 #define MAX_LISTENER_SOCKETS 1
 
@@ -13,6 +11,6 @@
 
 void run_server();
 void kill_server();
-int init_server(sa_family_t sockFam, const char *hostname, char *port, bool isSockAbstract);
+int init_server(sa_family_t sockFam, const char *hostname, char *port, int isSockAbstract);
 
 #endif //SERVER_H

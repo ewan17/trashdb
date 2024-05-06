@@ -74,7 +74,7 @@ static int unix_client(char *sockDir) {
     unsigned char read_buffer[1024];
     struct sockaddr_un addr;
     int conn;
-    int sock = -1;
+    int sock;
     int flags;
 
     sock = socket(AF_UNIX, SOCK_STREAM, 0);

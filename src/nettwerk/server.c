@@ -1,22 +1,15 @@
 #include <sys/types.h>                                                                                                      
-#include <sys/socket.h>
 #include <stdbool.h>
 #include <sys/un.h>
 #include <sys/stat.h>
 #include <netdb.h>
 #include <string.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <ctype.h>
 #include <errno.h>
-#include <event2/event.h>
 
-#include "buffy.h"
-#include "server.h"
-
-struct event_base *serverBase;
-pthread_mutex_t base_mutex;
+#include "global.h"
 
 static struct List listeners;
 
@@ -40,22 +33,15 @@ static void on_connect(evutil_socket_t sock, short flags, void *arg);
  * @todo    add sig handler
 */
 void run_server() {
-    /**
-     *  libevent sighandler stuff goes 
-    */ 
-    serverBase = event_base_new();
-    if(serverBase != NULL) {
-        start_accepting_connections();
-
-        event_base_dispatch(serverBase);
-    }
+    start_accepting_connections();
+    event_base_dispatch(serverBase);
 }
 
 /**
  * @todo    change parameters
  * @todo    make void method calls, do not make them return ints
 */
-int init_server(sa_family_t sockFam, const char *hostname, char *port, bool isSockAbstract) {
+int init_server(sa_family_t sockFam, const char *hostname, char *port, int isSockAbstract) {
     INIT_LIST(&listeners);
 
     if(init_server_sock(sockFam, hostname, port, isSockAbstract) != 0) {
@@ -66,6 +52,8 @@ int init_server(sa_family_t sockFam, const char *hostname, char *port, bool isSo
 }
 
 void kill_server() {
+    
+    clean_listening_sockets();
     event_base_loopexit(serverBase, NULL);
     event_base_free(serverBase);
 }

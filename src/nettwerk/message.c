@@ -4,8 +4,7 @@
 #include <stdlib.h>
 #include <limits.h>
 
-#include "../trash/global.h"
-#include "message.h"
+#include "global.h"
 
 static int init_message(Message *message, uint32_t dispatchSize);
 static void reset_message(Message *message);
@@ -115,27 +114,29 @@ static void resize_message(Message *message, uint32_t size) {
             goto error;
         }
 
-        size_t new_capacity = message->capacity * 2;
-        while(new_capacity < size) {
-            new_capacity = new_capacity * 2;
+        size_t needed = message->capacity * 2;
+        while(needed < size) {
+            needed = needed * 2;
         }
 
-        if(new_capacity > UINT32_MAX) {
-            new_capacity = UINT32_MAX;
+        if(needed > UINT32_MAX) {
+            needed = UINT32_MAX;
         }
 
-        message->data = (char *) realloc(message->data, new_capacity * sizeof(char));
+        message->data = trash_realloc(message->data, needed);
         if(message->data == NULL) {
             goto error;
         }
-        message->capacity = new_capacity;
+        message->capacity = needed;
     }
+
+    return;
 
 error:
     /**
      * @todo    add some sort of error handling here for invalid realloc or for a resize limit
      * @note    the code below should be changed
     */
-    printf("error resizing message");
+    printf("error resizing message\n");
     exit(1);
 }

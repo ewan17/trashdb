@@ -12,7 +12,11 @@
         "event.h": "c",
         "stddef.h": "c",
         "err.h": "c",
-        "stdio.h": "c"
+        "stdio.h": "c",
+        "lmdb.h": "c",
+        "pthread.h": "c",
+        "errno.h": "c",
+        "message.h": "c"
     },
     "C_Cpp.errorSquiggles": "enabled"
 }

@@ -5,8 +5,6 @@
 
 #define DEFAULT_DISPATCH_SIZE 1024
 
-#include <stdint.h>
-
 typedef struct Message {
     char *data;
     uint32_t start;

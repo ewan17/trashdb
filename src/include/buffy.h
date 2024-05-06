@@ -31,6 +31,9 @@ typedef struct TrashData {
     struct event *ev;
     SSL *ctx;
 
+    char *dbname;
+    char *username;
+
     size_t remainingPacket;
     Message *packet;
     bool partialPacket;
