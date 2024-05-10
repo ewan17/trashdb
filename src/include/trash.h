@@ -23,14 +23,15 @@
 */
 #define MAX_DBS 1
 
-typedef struct TrashDB {
-    MDB_env *env;
-    KiddiePool *pool;
-} TrashDB;
+// typedef struct TrashDB {
+    // manage all txns so that we can call mdb_dbi_open safely
+    // MDB_env *env;
+    // KiddiePool *pool;
+// } TrashDB;
 
-typedef struct TrashWorker {
-    MDB_txn *txn;
-    char *dbname;
-} TrashWorker;
+// typedef struct TrashWorker {
+//     MDB_txn *txn;
+//     char *dbname;
+// } TrashWorker;
 
 #endif //TRASH_H
