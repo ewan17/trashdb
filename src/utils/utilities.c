@@ -5,8 +5,13 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <unistd.h>
 
 #include "utilities.h"
+
+bool is_file(const char *path) {
+    return (access(path, F_OK) == 0);
+}
 
 void *trash_realloc(void *ptr, size_t needed) {
     void *newPtr;
@@ -156,7 +161,7 @@ struct IList *pop(struct List *list) {
 }
 
 void append(struct List *list, struct IList *ilist) {
-    ilist_append(&list->head, ilist);
+    ilist_append(&list->head.next, ilist);
     list->count++;
 }
 

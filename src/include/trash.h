@@ -1,7 +1,10 @@
 #ifndef TRASH_H
 #define TRASH_H
 
+#include <string.h>
 #include <stddef.h>
+#include <pthread.h>
+#include <stdbool.h>
 
 #include "lmdb.h"
 #include "trashinit.h"
@@ -23,15 +26,15 @@
 */
 #define MAX_DBS 1
 
-// typedef struct TrashDB {
-    // manage all txns so that we can call mdb_dbi_open safely
-    // MDB_env *env;
-    // KiddiePool *pool;
-// } TrashDB;
+/**
+ * @note    the open envs and the dbs can be placed in there own env in lmdb, but may be too much overhead to check if they are open in there vs looping list
+ * @note    honestly this looping could be bad
+ * @todo    fix later
+*/
 
-// typedef struct TrashWorker {
-//     MDB_txn *txn;
-//     char *dbname;
-// } TrashWorker;
+typedef struct TrashWorker {
+    MDB_txn *txn;
+    char *dbname;
+} TrashWorker;
 
 #endif //TRASH_H

@@ -6,6 +6,8 @@
 #define KEEP_INTERVAL   2
 #define KEEP_COUNT  10
 
+bool is_file(const char *path);
+
 void *trash_realloc(void *sendBuff, size_t needed);
 
 bool sock_buff_size(int sock, int send_buffy_size, int recv_buffy_size);
