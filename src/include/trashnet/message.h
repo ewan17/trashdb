@@ -13,7 +13,7 @@ typedef struct Message {
 } Message;
 
 int build_message(Message *message);
-void dispatch_message();
+void dispatch_message(SendBuff *sendBuff);
 void kill_message(Message *message);
 
 void add_byte_to_message(Message *message, const char data);

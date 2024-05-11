@@ -1,5 +1,6 @@
 #include "global.h"
-#include "trash.h"
+#include "trashnet.h"
+#include "trashdb.h"
 
 #define NO_NULL(item) \
     check_not_null(item, __FILE__, __LINE__)

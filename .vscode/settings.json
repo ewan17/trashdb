@@ -19,7 +19,8 @@
         "message.h": "c",
         "kiddiepool.h": "c",
         "global.h": "c",
-        "trash.h": "c"
+        "trash.h": "c",
+        "trashnet.h": "c"
     },
     "C_Cpp.errorSquiggles": "enabled"
 }

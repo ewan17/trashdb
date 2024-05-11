@@ -1,18 +1,59 @@
-#include <string.h>
-#include <stddef.h>
 #include <arpa/inet.h>
 #include <event2/bufferevent_ssl.h>
 
-#include "global.h"
+#include "trashnet.h"
+
+enum CurrEv {
+    READ_EV,
+    WRITE_EV,
+};
+
+struct SendBuff {
+    size_t endPtr;
+    size_t startPtr;
+    size_t sendBuffSize;
+
+    char *sendBuff;
+
+    pthread_mutex_t sbMutex;
+};
+
+/*
+    @todo   SSL/TLS; use OpenSSL library 
+    @todo   maybe add mdb txn or db env
+*/ 
+struct TrashData {
+    int fd;
+    enum CurrEv curr;
+    struct event *ev;
+    SSL *ctx;
+
+    pthread_mutex_t tdMutex;
+
+    char *dbname;
+    char *username;
+
+    size_t remainingPacket;
+    Message *packet;
+    bool partialPacket;
+
+    SendBuff *sendBuff;
+
+    size_t recvBuffLen;
+    size_t recvBuffPtr;
+    char recvBuff[RECV_BUFFY_SIZE];
+};
+
+static SendBuff *init_send_buff(size_t sendBuffSize);
 
 static void close_client_internal(TrashData *td);
-static void buffer_read_cb(evutil_socket_t sock, short flags, void *arg);
-static void buffer_write_cb(evutil_socket_t sock, short flags, void *arg);
+static void buffer_read_cb(evutil_socket_t fd, short flags, void *arg);
+static void buffer_write_cb(evutil_socket_t fd, short flags, void *arg);
 
 static int get_bytes_from_kernel(evutil_socket_t fd, char *buff, uint32_t buffLen, uint32_t *startPtr, uint32_t *endPtr);
 static void get_bytes_from_buff(char *buff, uint32_t *startPtr, uint32_t *endPtr, char *strg, size_t strgLen);
-static void put_bytes_on_buff(evutil_socket_t fd, char *sendBuff, size_t *sendBuffLen, size_t *startPtr, size_t *endPtr, char *fromBuff, size_t fromBuffLen);
-static int flush_data(evutil_socket_t fd, char *buff, size_t buffLen, size_t *startPtr, size_t *endPtr);
+static void put_bytes_on_buff(char *sendBuff, size_t *sendBuffLen, size_t *startPtr, size_t *endPtr, char *fromBuff, size_t fromBuffLen);
+static int flush_data(evutil_socket_t fd, SendBuff *sb);
 static void resize_send_buff(char **sendBuff, size_t *sendBuffLen, size_t needed);
 
 /**
@@ -35,14 +76,7 @@ int construct_client(evutil_socket_t clientFd, TrashData **ts, bool isUnixSock) 
     }
 
     td->recvBuffPtr = td->recvBuffLen = 0;
-    td->sendBuffPtr = td->sendBuffLen = 0;
-
-    td->sendBuff = (char *) malloc(SEND_BUFFY_SIZE * sizeof(char));
-    if(td->sendBuff == NULL) {
-        goto error;
-    }
-
-    td->sendBuffSize = SEND_BUFFY_SIZE;
+    td->sendBuff = init_send_buff(SEND_BUFFY_SIZE);
 
     td->packet = (struct Message *) malloc(sizeof(struct Message));
     if(td->packet == NULL) {
@@ -57,6 +91,16 @@ int construct_client(evutil_socket_t clientFd, TrashData **ts, bool isUnixSock) 
     td->remainingPacket = 0;
     
     td->fd = clientFd;
+
+    if(pthread_mutex_init(&td->tdMutex, NULL) != 0) {
+        goto error;
+    }
+
+    /**
+     * @note    will there be data in the recvBuffer on client connect?
+     * @note    might need to handle the clients startup packet here
+     * @todo    look into this
+    */
     if(data_wait(td) != 0) {
         goto error;
     }
@@ -67,7 +111,18 @@ error:
     evutil_closesocket(clientFd);
     free(ts);
     return TRASH_ERROR;
-} 
+}
+
+/**
+ * @todo    needs fixing
+*/
+int close_client(TrashData *td) {
+    if(td == NULL) {
+        return TRASH_ERROR;
+    }
+    close_client_internal(td);
+    return TRASH_SUCCESS;
+}
 
 int data_wait(TrashData *td) { 
     if((td->ev = event_new(serverBase, td->fd, EV_READ|EV_PERSIST, buffer_read_cb, (void *) td)) == NULL) {
@@ -84,13 +139,14 @@ int data_wait(TrashData *td) {
     return TRASH_SUCCESS;
 }
 
-int data_send(TrashData *td) { 
+int data_send(TrashData *td) {
+    pthread_mutex_lock(&td->tdMutex);
     if(event_del(td->ev) == -1) {
         printf("Error deleting read event\n");
         return TRASH_ERROR;
     }   
 
-    if((td->ev = event_new(serverBase, td->fd, EV_WRITE, buffer_write_cb, (void *) td)) == NULL) {
+    if((td->ev = event_new(serverBase, td->fd, EV_WRITE, buffer_write_cb, (void *) td->sendBuff)) == NULL) {
         printf("Error creating new write event\n");
         return TRASH_ERROR;
     }
@@ -101,19 +157,31 @@ int data_send(TrashData *td) {
     }
 
     td->curr = WRITE_EV;
+    pthread_mutex_unlock(&td->tdMutex);
 
     return TRASH_SUCCESS;
 }
 
-/**
- * @todo    needs fixing
-*/
-int close_client(TrashData *td) {
+bool trash_flush(TrashData *td) {
     if(td == NULL) {
-        return TRASH_ERROR;
+        return false;
     }
-    close_client_internal(td);
-    return TRASH_SUCCESS;
+
+    int rc;
+    rc = flush_data(td->fd, td->sendBuff);
+
+    if(rc < 0) {
+        if(errno == EAGAIN) {
+            if(data_send(td) != TRASH_SUCCESS) {
+                /**
+                 * @todo    kill the connection if data cannot be sent
+                */
+            }
+        }
+        return false;
+    }
+
+    return true;
 }
 
 /*
@@ -220,25 +288,57 @@ get_more_data:
     // send message to threads
 }
 
-// what do I do with the buffer after a successful write to the client?
-static void buffer_write_cb(evutil_socket_t sock, short flags, void *arg) {
-    TrashData *td = (TrashData *) arg;
+/**
+ * @note    what do I do with the buffer after a successful write to the client?
+*/
+static void buffer_write_cb(evutil_socket_t fd, short flags, void *arg) {
+    struct SendBuff *sb = (struct SendBuff *) arg;
     
-    int rc = flush_data(td->fd, td->sendBuff, td->sendBuffSize, &td->sendBuffPtr, &td->sendBuffLen);
+    int rc = flush_data(fd, sb);
     if(rc != TRASH_SUCCESS) {
         /**
          * @todo    handle error
         */
     }
 
-    // set the send buffer size back to default size
-    if(td->sendBuffSize != SEND_BUFFY_SIZE) {
-        td->sendBuffSize = SEND_BUFFY_SIZE;
-        trash_realloc(td->sendBuff, SEND_BUFFY_SIZE);
+    /**
+     * @note    set the send buffer size back to default size
+     * @todo    am I always flushing all the data?
+    */
+    if(sb->sendBuffSize != SEND_BUFFY_SIZE) {
+        pthread_mutex_lock(&sb->sbMutex);
+        sb->sendBuffSize = SEND_BUFFY_SIZE;
+        sb->sendBuff = trash_realloc(sb->sendBuff, SEND_BUFFY_SIZE);
+        sb->startPtr = sb->endPtr = 0;
+        pthread_mutex_unlock(&sb->sbMutex);
     }
 };
 
-/* ---------- SEND & RECV FUNCTIONALITY ---------- */
+static SendBuff *init_send_buff(size_t sendBuffSize) {
+    SendBuff *buff;
+    buff = (SendBuff *)malloc(sizeof(SendBuff *));
+    if (buff == NULL) {
+        return NULL;
+    }
+
+    buff->sendBuff = (char *) malloc(sendBuffSize * sizeof(char));
+    if(buff->sendBuff == NULL) {
+        free(buff);
+        return NULL;
+    }
+
+    buff->sendBuffSize = sendBuffSize;
+    buff->endPtr = buff->startPtr = 0;
+
+    if(pthread_mutex_init(&buff->sbMutex, NULL) != 0) {
+        free(buff->sendBuff);
+        free(buff);
+        return NULL;
+    }
+
+    return buff;
+}
+
 
 /**
  * Helper function to retrieve bytes from the kernel and add them to the recv buffer
@@ -287,10 +387,11 @@ static void get_bytes_from_buff(char *buff, uint32_t *startPtr, uint32_t *endPtr
 }
 
 /**
+ * @todo    will need locking since we are moving data to the send buffer
  * @todo    this function needs fixing. We could be flushing data to the send buffer
  * @todo    resize the buffer if need be
 */
-static void put_bytes_on_buff(evutil_socket_t fd, char *sendBuff, size_t *sendBuffLen, size_t *startPtr, size_t *endPtr, char *fromBuff, size_t fromBuffLen) {
+static void put_bytes_on_buff(char *sendBuff, size_t *sendBuffLen, size_t *startPtr, size_t *endPtr, char *fromBuff, size_t fromBuffLen) {
     size_t sendBuffSpace = *sendBuffLen - *endPtr;
     if(fromBuffLen > sendBuffSpace) {
         size_t needed = fromBuffLen - sendBuffSpace;
@@ -301,12 +402,12 @@ static void put_bytes_on_buff(evutil_socket_t fd, char *sendBuff, size_t *sendBu
     *endPtr += fromBuffLen;    
 }
 
-static int flush_data(evutil_socket_t fd, char *buff, size_t buffLen, size_t *startPtr, size_t *endPtr) {
+static int flush_data(evutil_socket_t fd, SendBuff *sb) {
     ssize_t len = 0;
 
-    while(*startPtr < *endPtr) {
+    while(sb->startPtr < sb->endPtr) {
         ssize_t rc;
-        rc = send(fd, buff, *endPtr - *startPtr, 0);
+        rc = send(fd, sb->sendBuff, sb->endPtr - sb->startPtr, 0);
         if(rc == -1) {
             if(errno == EINTR) {
                 continue;
@@ -317,11 +418,16 @@ static int flush_data(evutil_socket_t fd, char *buff, size_t buffLen, size_t *st
         }
 
         len += rc;
-        *startPtr += len;
+
+        pthread_mutex_lock(&sb->sbMutex);
+        sb->startPtr += len;
+        pthread_mutex_unlock(&sb->sbMutex);
     }
 
-    *startPtr = *endPtr = 0;
-    
+    pthread_mutex_lock(&sb->sbMutex);
+    sb->startPtr = sb->endPtr = 0;
+    pthread_mutex_unlock(&sb->sbMutex);
+
     return TRASH_SUCCESS;
 }
 

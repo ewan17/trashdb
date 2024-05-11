@@ -1,10 +1,6 @@
-#include <stddef.h>
-#include <stdbool.h>
-#include <string.h>
-#include <stdlib.h>
 #include <limits.h>
 
-#include "global.h"
+#include "trashnet.h"
 
 static int init_message(Message *message, uint32_t dispatchSize);
 static void reset_message(Message *message);
@@ -18,6 +14,10 @@ int build_message(Message *message) {
     int rc;
     rc = init_message(message, DEFAULT_DISPATCH_SIZE);
     return rc;
+}
+
+void dispatch_message(SendBuff *sendBuff) {
+    
 }
 
 void kill_message(Message *message) {

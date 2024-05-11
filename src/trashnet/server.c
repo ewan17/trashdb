@@ -1,15 +1,11 @@
 #include <sys/types.h>                                                                                                      
-#include <stdbool.h>
 #include <sys/un.h>
-#include <sys/stat.h>
 #include <netdb.h>
-#include <string.h>
-#include <stdlib.h>
 #include <unistd.h>
 #include <ctype.h>
 #include <errno.h>
 
-#include "global.h"
+#include "trashnet.h"
 
 INIT_LIST(listeners);
 

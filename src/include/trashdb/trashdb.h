@@ -1,15 +1,11 @@
 #ifndef TRASH_H
 #define TRASH_H
 
-#include <string.h>
-#include <stddef.h>
-#include <pthread.h>
-#include <stdbool.h>
+#include "global.h"
 
 #include "lmdb.h"
-#include "trashinit.h"
+#include "cook.h"
 #include "db.h"
-#include "utilities.h"
 
 #define MAX_DIR_SIZE 1024
 #define DB_SIZE 10485760
@@ -32,9 +28,14 @@
  * @todo    fix later
 */
 
-typedef struct TrashWorker {
-    MDB_txn *txn;
-    char *dbname;
-} TrashWorker;
+typedef struct TrashThread {
+    pthread_t tid;
+
+    SendBuff *sendBuff;
+
+    // original set to NULL until the message is parsed
+    char *tablename;
+    char *indexname;
+} TrashThread;
 
 #endif //TRASH_H

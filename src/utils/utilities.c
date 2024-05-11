@@ -9,10 +9,6 @@
 
 #include "utilities.h"
 
-bool is_file(const char *path) {
-    return (access(path, F_OK) == 0);
-}
-
 void *trash_realloc(void *ptr, size_t needed) {
     void *newPtr;
     newPtr = realloc(ptr, needed);
