@@ -15,5 +15,7 @@ struct RTxns {
  * @todo    figure out the structure of the arg
 */
 void cook(void *arg) {
+    TrashThread *tt = (TrashThread *) arg;
+
     
 }

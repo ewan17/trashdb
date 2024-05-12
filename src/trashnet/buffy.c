@@ -33,9 +33,9 @@ struct TrashData {
     char *dbname;
     char *username;
 
-    size_t remainingPacket;
-    Message *packet;
-    bool partialPacket;
+    size_t remainingMsg;
+    Message *msg;
+    bool partialMsg;
 
     SendBuff *sendBuff;
 
@@ -78,17 +78,17 @@ int construct_client(evutil_socket_t clientFd, TrashData **ts, bool isUnixSock) 
     td->recvBuffPtr = td->recvBuffLen = 0;
     td->sendBuff = init_send_buff(SEND_BUFFY_SIZE);
 
-    td->packet = (struct Message *) malloc(sizeof(struct Message));
-    if(td->packet == NULL) {
+    td->msg = (struct Message *) malloc(sizeof(struct Message));
+    if(td->msg == NULL) {
         goto error;
     }
 
-    if(build_message(td->packet) != TRASH_SUCCESS) {
+    if(build_message(td->msg) != TRASH_SUCCESS) {
         goto error;
     }
 
-    td->partialPacket = false;
-    td->remainingPacket = 0;
+    td->partialMsg = false;
+    td->remainingMsg = 0;
     
     td->fd = clientFd;
 
@@ -193,8 +193,8 @@ static void close_client_internal(TrashData *td) {
     }
     event_del(td->ev);
 
-    kill_message(td->packet);
-    td->packet = NULL;
+    kill_message(td->msg);
+    td->msg = NULL;
 
     free(td->sendBuff);
     td->sendBuff = NULL;
@@ -236,13 +236,13 @@ get_more_data:
         }
     }
 
-    Message *pkt = td->packet;
-    if(td->partialPacket) {
-        if(td->remainingPacket < availBytes) {
-            availBytes = td->remainingPacket;
+    Message *msg = td->msg;
+    if(td->partialMsg) {
+        if(td->remainingMsg < availBytes) {
+            availBytes = td->remainingMsg;
         }
 
-        td->remainingPacket -= availBytes;
+        td->remainingMsg -= availBytes;
     } else {
         uint32_t len;
         if(availBytes < TRASH_MSG_LEN) {
@@ -267,15 +267,27 @@ get_more_data:
             availBytes = len;
         }
 
-        td->remainingPacket = len - availBytes;
+        td->remainingMsg = len - availBytes;
+        td->partialMsg = (td->remainingMsg > 0);
     }
 
-    add_bytes_to_message(pkt, td->recvBuff + td->recvBuffPtr, availBytes);
+    if(!td->partialMsg) {
+        // the enitre message fit within the recv buffer
+        // no need to go get more data
+        
+    } else {
+        add_bytes_to_message(msg, td->recvBuff + td->recvBuffPtr, availBytes);
 
-    if(td->remainingPacket > 0) {
-        td->partialPacket = true;
-        goto get_more_data;
+        if(td->remainingMsg > 0) {
+            goto get_more_data;
+        } else {
+            td->partialMsg = false;
+        }
     }
+
+    
+
+
 
     /**
      * @note    echo server for now

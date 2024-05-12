@@ -6,6 +6,7 @@
 #include "lmdb.h"
 #include "cook.h"
 #include "db.h"
+#include "buffy.h"
 
 #define MAX_DIR_SIZE 1024
 #define DB_SIZE 10485760
@@ -30,12 +31,14 @@
 
 typedef struct TrashThread {
     pthread_t tid;
+    
 
-    SendBuff *sendBuff;
-
+    TrashData *td;
     // original set to NULL until the message is parsed
     char *tablename;
     char *indexname;
+
+    MDB_txn *txn;
 } TrashThread;
 
 #endif //TRASH_H
