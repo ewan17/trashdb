@@ -4,8 +4,10 @@
 #include "global.h"
 
 #include "lmdb.h"
+#include "uthash.h"
 #include "cook.h"
 #include "db.h"
+#include "env.h"
 #include "buffy.h"
 
 #define MAX_DIR_SIZE 1024
