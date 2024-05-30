@@ -6,7 +6,16 @@
 #define KEEP_INTERVAL   2
 #define KEEP_COUNT  10
 
+#define MAX_DIR_SIZE 256
+
+#include <stdbool.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <sys/socket.h>
+
 void *trash_realloc(void *sendBuff, size_t needed);
+
+int trash_mkdir(const char *path, size_t len, mode_t mode);
 
 bool sock_buff_size(int sock, int send_buffy_size, int recv_buffy_size);
 bool keep_sock_alive(int sock, int alive, int idle, int interval, int maxpkt);

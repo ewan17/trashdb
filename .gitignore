@@ -2,4 +2,6 @@ test/
 lib/
 playground/
 
+build/
+
 .vscode/

@@ -18,7 +18,7 @@ static void sighup_handler();
 
 static void check_not_null(void *item, const char *file, int line);
 
-int main() {
+int main(int argc, char *argv[]) {
     serverBase = event_base_new();
     NO_NULL(serverBase);
     if(serverBase == NULL) {

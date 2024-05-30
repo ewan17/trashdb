@@ -1,11 +1,12 @@
 #include <arpa/inet.h>
 #include <sys/un.h>
-#include <sys/socket.h>
 #include <netinet/tcp.h>
+#include <event2/event.h>
 #include <ctype.h>
 #include <stdlib.h>
-#include <stdbool.h>
 #include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
 
 #include "utilities.h"
 
@@ -16,6 +17,34 @@ void *trash_realloc(void *ptr, size_t needed) {
         free(ptr);
     }
     return newPtr;
+}
+
+int trash_mkdir(const char *path, size_t len, mode_t mode) {
+    char holder[MAX_DIR_SIZE];
+    int rc;
+
+    if(len > MAX_DIR_SIZE) {
+        return -1;
+    }
+
+    memcpy(holder, path, len);
+    holder[len] = '\0';
+
+    for (size_t i = 0; i < len; i++)
+    {
+        if(holder[i] == '/' && i != 0) {
+            holder[i] = '\0';
+
+            rc = mkdir(holder, mode);
+            if(rc != 0 && errno != EEXIST) {
+                return -1;
+            }
+
+            holder[i] = '/';
+        }
+    }
+
+    return 0;
 }
 
 bool sock_buff_size(int sock, int send_buffy_size, int recv_buffy_size) {
@@ -54,13 +83,19 @@ bool keep_sock_alive(int sock, int alive, int idle, int interval, int maxpkt) {
 }
 
 int opt_sock(int sock, bool isUnixSock) {
-    if(evutil_make_socket_nonblocking(sock) != 0) {
-        return 1;
-    }   
+    int flags = fcntl(sock, F_GETFL, 0);
+    if (flags == -1) {
+        return -1;
+    }
+
+    flags |= O_NONBLOCK;
+    if (fcntl(sock, F_SETFL, flags) == -1) {
+        return -1;
+    }
 
     if(!isUnixSock) {
         if(!keep_sock_alive(sock, KEEP_ALIVE, KEEP_IDLE, KEEP_INTERVAL, KEEP_COUNT)) {
-            return 1;
+            return -1;
         }
     }
     return 0;
@@ -157,7 +192,7 @@ struct IList *pop(struct List *list) {
 }
 
 void append(struct List *list, struct IList *ilist) {
-    ilist_append(&list->head.next, ilist);
+    ilist_append(list->head.next, ilist);
     list->count++;
 }
 

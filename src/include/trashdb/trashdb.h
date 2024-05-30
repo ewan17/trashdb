@@ -1,24 +1,35 @@
 #ifndef TRASH_H
 #define TRASH_H
 
-#include "global.h"
+#include <errno.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stddef.h>
+#include <pthread.h>
+#include <stdbool.h>
+#include <semaphore.h>
+#include <regex.h>
 
 #include "lmdb.h"
 #include "uthash.h"
-#include "cook.h"
-#include "db.h"
 #include "env.h"
-#include "buffy.h"
 
-#define MAX_DIR_SIZE 1024
+#define TRASH_SUCCESS (0)
+#define TRASH_ERROR (-1)
+#define TRASH_EOF (-2)
+
 #define DB_SIZE 10485760
 
-/**
- * @note    this needs fixing
-*/
-#define TRASH_PATH "../../../var/local/trashdb/"
-#define LOG_DIR TRASH_PATH "logs/"
-#define DB_DIR TRASH_PATH "data/"
+#ifdef DEBUG
+#define TRASH_DIR ""
+#else
+#define TRASH_DIR "/var/local/trashdb/"
+#endif
+
+#define TABLE_DIR TRASH_DIR "tables/"
+#define TABLE_DIR_LEN sizeof(TABLE_DIR) - 1
 
 /**
  * @note    this will change later
@@ -31,16 +42,16 @@
  * @todo    fix later
 */
 
-typedef struct TrashThread {
-    pthread_t tid;
+// typedef struct TrashThread {
+//     pthread_t tid;
     
 
-    TrashData *td;
-    // original set to NULL until the message is parsed
-    char *tablename;
-    char *indexname;
+//     TrashData *td;
+//     // original set to NULL until the message is parsed
+//     char *tablename;
+//     char *indexname;
 
-    MDB_txn *txn;
-} TrashThread;
+//     MDB_txn *txn;
+// } TrashThread;
 
 #endif //TRASH_H

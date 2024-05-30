@@ -1,5 +1,5 @@
 #include "trashdb.h"
-#include <semaphore.h>
+#include "utilities.h"
 
 #define VALID(rc) \
     valid(rc, __LINE__) \
@@ -19,7 +19,9 @@ struct OpenEnv {
     MDB_env *env;
 
     // allows only one write txn for an env
-    sem_t writeSem;
+    pthread_mutex_t writeMutex;
+    pthread_cond_t writeCond;
+    int writer;
 
     // are all the sub databases for an env open?
     bool allOpen;
@@ -41,47 +43,50 @@ static pthread_rwlock_t envLock, dbiLock = PTHREAD_RWLOCK_INITIALIZER;
 */
 static int valid(int rc, int line);
 
-static void open_all_dbs(MDB_txn *txn);
+static int internal_validate_tablename(char *tableName);
 
 static int internal_set_env_fields(MDB_env *env, size_t dbsize, unsigned int numdbs, unsigned int numthreads);
+
+static int internal_get_dbi(struct OpenDbi *oDbi, const char *indexName, MDB_dbi *dbi);
 
 static void internal_create_open_env(struct OpenEnv **oEnv, MDB_env *env);
 static void internal_create_handle(struct OpenDbi **oDbi, const char *index, MDB_dbi dbi);
 
-static struct OpenEnv *internal_get_env_txn(MDB_txn *txn);
-static struct OpenEnv *internal_get_env_path(const char *path);
 static struct OpenEnv *internal_remove_env(const char *path);
 
 /**
- * @note    this function will open all the dbis if there is room
- * @todo    work on a function that can determine if there is room for dbis to be open
+ * @todo    this function needs logging for errors
+ * @todo    check the length of the table name or pass the length of the tablename as a parameter in the function
 */
-MDB_env *open_env(char *path, size_t dbsize, unsigned int numdbs, unsigned int numthreads) {
+MDB_env *open_env(char *tableName, size_t dbsize, unsigned int numdbs, unsigned int numthreads) {
     MDB_env *env;
     MDB_txn *txn;
     MDB_dbi unDbi;
-
     struct OpenEnv *oEnv;
     struct OpenDbi *oDbi;
-
     struct stat st;
-
+    char path[256];
     int rc;
 
-    if((env = get_env(path)) != NULL) {
+    if(internal_validate_tablename(tableName) != 0) {
+        return NULL;
+    }   
+
+    if((env = get_env(tableName)) != NULL) {
         return env;
     }
-    
-    if(path == NULL || stat(path, &st) < 0) {
-        return NULL;
-    }
 
-    if(!S_ISDIR(st.st_mode)) {
-        /**
-         * @note    if it made it here, the path could be a file and not a dir
-         * @todo    create dir
-         * @todo    need to make a dir where the users table files are stored
-        */
+    snprintf(path, sizeof(path), "%s%s", TABLE_DIR, tableName);
+    
+    if(stat(path, &st) < 0) {
+        if(errno = ENOENT) {
+            if(mkdir(path, 0777) != 0) {
+                printf("here: %s\n", strerror(errno));
+                return NULL;
+            }
+        } else {
+            return NULL;
+        }
     }
 
     mdb_env_create(&env);
@@ -89,9 +94,9 @@ MDB_env *open_env(char *path, size_t dbsize, unsigned int numdbs, unsigned int n
         return NULL;
     }
 
-    if((rc = mdb_env_open(env, path, MDB_NOTLS, 0664)) != 0) {
+    if((rc = mdb_env_open(env, tableName, 0, 0664)) != 0) {
         /**
-         * @todo    handle the different possible errors with rc
+         * @todo    handle the different possible errors for an invalid open
         */ 
         mdb_env_close(env);
         return NULL;
@@ -101,21 +106,32 @@ MDB_env *open_env(char *path, size_t dbsize, unsigned int numdbs, unsigned int n
     internal_create_open_env(&oEnv, env);
 
     // open the unnamed db
-    VALID(mdb_txn_begin(env, NULL, 0, &txn));
+    VALID(mdb_txn_begin(env, NULL, MDB_RDONLY, &txn));
     VALID(mdb_dbi_open(txn, NULL, 0, &unDbi));
+    mdb_txn_abort(txn);
 
     // create unnamed db key/value
     internal_create_handle(&oDbi, INDICES, unDbi);
     HASH_ADD_STR(oEnv->oDbi, name, oDbi);
 
     // add open env struct to env hash map
-    pthread_rwlock_wlock(&envLock);
+    pthread_rwlock_wrlock(&envLock);
     HASH_ADD_STR(oEnvs, path, oEnv);
     pthread_rwlock_unlock(&envLock);
 
-    open_all_dbs(txn);
-
     return env;
+}
+
+MDB_env *get_env(const char *tableName) {
+    struct OpenEnv *result;
+
+    result = get_env_from_path(tableName);
+
+    if(result != NULL) {
+        return result->env;
+    }
+
+    return NULL;
 }
 
 void close_env(MDB_env *env) {
@@ -138,64 +154,52 @@ void close_env(MDB_env *env) {
     }
 }
 
-MDB_env *get_env(const char *path) {
-    struct OpenEnv *result;
-    result = internal_get_env_path(path);
-
-    if(result != NULL) {
-        return result->env;
-    }
-
-    return NULL;
+bool is_all_open(OpenEnv *oEnv) {
+    return oEnv->allOpen;
 }
 
-int get_dbi(MDB_env *env, const char *indexName, MDB_dbi *dbi) {
-    if(env == NULL) {
-        return -1;
-    }
-
-    struct OpenEnv *oEnv;
-    struct OpenDbi *oDbi;
-    const char *path;
-
-    mdb_env_get_path(env, &path);
-    oEnv = internal_get_env(path);
-    
-    internal_get_dbi(oEnv->oDbi, indexName, dbi);
-
-    if(*dbi == 0) {
-        return TRASH_ERROR;
-    }
-
-    return TRASH_SUCCESS;
-}
-
-MDB_dbi *open_db(const char *table, const char *indexName) {
-    struct OpenEnv *oEnv;
-    struct OpenDbi *oDbi;
-
+void open_all(MDB_txn *txn, OpenEnv *oEnv) {
     MDB_cursor *cur;
-    MDB_txn *txn;
+    MDB_dbi dbi;
+    MDB_val key, val;
+    int rc;
+
+    internal_get_dbi(oEnv->oDbi, INDICES, &dbi);
+    VALID(mdb_cursor_open(txn, dbi, &cur));
+
+    pthread_rwlock_wrlock(&dbiLock);
+    while((rc = mdb_cursor_get(cur, &key, &val, MDB_NEXT)) == 0) {
+        struct OpenDbi *handle;
+        char *indexName;
+        
+        indexName = (char *)key.mv_data;
+
+        HASH_FIND_STR(oEnv->oDbi, indexName, handle);
+
+        if(handle == NULL) {
+            VALID(mdb_dbi_open(txn, indexName, 0, &dbi));
+
+            internal_create_handle(&handle, indexName, dbi);
+            HASH_ADD_STR(oEnv->oDbi, name, handle);
+        }
+    }
+    pthread_rwlock_unlock(&dbiLock);
+
+    oEnv->allOpen = true;
+    mdb_cursor_close(cur);
+}
+
+int open_db(MDB_txn *txn, OpenEnv *oEnv, const char *indexName, MDB_dbi *dbi) {
+    struct OpenDbi *oDbi;
+    MDB_cursor *cur;
+    MDB_txn *tempTxn = txn;
     MDB_val key, data;
-    MDB_dbi unDbi, result;
-    
+    MDB_dbi result;
     int flags = 0;
     int rc;
 
-    if(indexName == NULL) {
-        return TRASH_ERROR;
-    }
-
-    if((oEnv = internal_get_env_path(table)) == NULL) {
-        return TRASH_ERROR;
-    }
-
-    internal_find_dbi(oEnv->oDbi, indexName, &oDbi);
-    
-    if(oDbi != NULL) {
-        result = oDbi->dbi;
-        return result;
-    }
+    internal_get_dbi(oEnv->oDbi, INDICES, &result);
+    VALID(mdb_cursor_open(txn, result, &cur));
     
     /**
      * @todo    validate that it is safe to get the len of this
@@ -203,60 +207,126 @@ MDB_dbi *open_db(const char *table, const char *indexName) {
     key.mv_size = strlen(indexName);
     key.mv_data = indexName;
 
-    VALID(mdb_txn_begin(oEnv->env, NULL, MDB_RDONLY, &txn));
-    internal_get_dbi(oEnv->oDbi, INDICES, &unDbi);
-    VALID(mdb_cursor_open(txn, unDbi, &cur));
-
     rc = mdb_cursor_get(cur, &key, &data, MDB_SET);
     if(rc == MDB_NOTFOUND) {
-        /**
-         * @todo       since this is a write txn, we need to set the semaphore
-        */
-        VALID(mdb_txn_begin(oEnv->env, NULL, 0, &txn));
+        // stop read txn since we are creating a write txn
+        mdb_txn_reset(txn);
+
+        begin_write_txn(oEnv);
+        // create write txn
+        VALID(mdb_txn_begin(oEnv->env, NULL, 0, &tempTxn));
         flags = MDB_CREATE;
     }
 
-    VALID(mdb_dbi_open(txn, indexName, flags, &result));
+    VALID(mdb_dbi_open(tempTxn, indexName, flags, &result));
     if(flags & MDB_CREATE) {
-        mdb_txn_commit(txn);
-    } else {
-        mdb_txn_abort(txn);
+        // push changes to db
+        mdb_txn_commit(tempTxn);
+        end_write_txn(oEnv);
     }
 
+    // add the OpenDbi struct to the hashmap
     internal_create_handle(&oDbi, indexName, result);
-    pthread_rwlock_wlock(&dbiLock);
+    pthread_rwlock_wrlock(&dbiLock);
     HASH_ADD_STR(oEnv->oDbi, name, oDbi);
     pthread_rwlock_unlock(&dbiLock);
+
+    // start up the read txn again if we had to pause for a write txn
+    if(flags & MDB_CREATE) {
+        mdb_txn_renew(txn);
+        mdb_cursor_renew(txn, cur);
+    }
     
+    *dbi = result;
+    return TRASH_SUCCESS;
+}
+
+int get_dbi(const char *tableName, const char *indexName, MDB_dbi *dbi) {
+    struct OpenEnv *oEnv;
+    int rc;
+
+    oEnv = get_env_from_path(tableName); 
+
+    rc = internal_get_dbi(oEnv->oDbi, indexName, dbi);
+    return rc;
+}
+
+OpenEnv *get_env_from_cur(MDB_cursor *cur) {
+    MDB_txn *txn;
+    OpenEnv *result;
+    
+    txn = mdb_cursor_txn(cur);
+    result = get_env_from_txn(txn);
     return result;
 }
 
-static void open_all_dbs(MDB_txn *txn) {
-    struct OpenEnv *oEnv;
-
-    MDB_cursor *cur;
-    MDB_dbi dbi;
-    MDB_val key, val;
+OpenEnv *get_env_from_txn(MDB_txn *txn) {
+    OpenEnv *result;
+    MDB_env *env;
+    const char *path;
     
-    int rc;
+    env = mdb_txn_env(txn);
+    mdb_env_get_path(env, &path);
+    result = get_env_from_path(path);
 
-    oEnv = internal_get_env_txn(txn);
-    internal_get_dbi(oEnv->oDbi, INDICES, &dbi);
-    VALID(mdb_cursor_open(txn, dbi, &cur));
+    return result;
+}
 
-    pthread_rwlock_wlock(&dbiLock);
-    while((rc = mdb_cursor_get(cur, &key, &val, MDB_NEXT)) == 0) {
-        char *indexName = (char *)key.mv_data;
+OpenEnv *get_env_from_path(const char *tableName) {
+    OpenEnv *result;
 
-        VALID(mdb_dbi_open(txn, indexName, 0, &dbi));
+    pthread_rwlock_rdlock(&envLock);
+    HASH_FIND_STR(oEnvs, tableName, result);
+    pthread_rwlock_unlock(&envLock);
 
-        struct OpenDbi *handle;
-        internal_create_handle(&handle, indexName, dbi);
-        HASH_ADD_STR(oEnv->oDbi, name, handle);
+    return result;
+}
+
+void begin_write_txn(OpenEnv *oEnv) {
+    pthread_mutex_lock(&oEnv->writeMutex);
+    while (oEnv->writer) {
+        pthread_cond_wait(&oEnv->writeCond, &oEnv->writeMutex);
     }
-    pthread_rwlock_unlock(&dbiLock);
+    oEnv->writer = 1;
+    pthread_mutex_unlock(&oEnv->writeMutex);
+}
 
-    mdb_cursor_close(cur);
+void end_write_txn(OpenEnv *oEnv) {
+    pthread_mutex_lock(&oEnv->writeMutex);
+    oEnv->writer = 0;
+    /**
+     * @note    for now we will broadcast even though signal would be more efficient right now
+     * @todo    add other conditions that the writers need to follow. Such as labeling certain writers as higher priority with flags
+    */
+    pthread_cond_broadcast(&oEnv->writeCond);
+    pthread_mutex_unlock(&oEnv->writeMutex);
+}
+
+/**
+ * @note    currently broken
+*/
+static int internal_validate_tablename(char *tableName) {
+    regex_t regex;
+    int regExp;
+
+    /**
+     * @note    this does not work "^[A-Za-z._-]+$"
+     * @todo    fix this later
+    */
+    regExp = regcomp(&regex, "", 0);
+    if(regExp != 0) {
+        return TRASH_ERROR;
+    }
+
+    regExp = regexec(&regex, tableName, 0, NULL, 0);
+    if(tableName == NULL || regExp == REG_NOMATCH) {
+        regfree(&regex);
+        return TRASH_ERROR;
+    }
+
+    regfree(&regex);
+
+    return TRASH_SUCCESS;
 }
 
 /**
@@ -276,10 +346,8 @@ static int internal_set_env_fields(MDB_env *env, size_t dbsize, unsigned int num
     return TRASH_SUCCESS;
 }
 
-static void internal_create_open_env(struct OpenEnv **oEnv, MDB_env *env) {
-    MDB_dbi unDbi;
-
-    *oEnv = malloc(sizeof(struct OpenEnv));
+static void internal_create_open_env(OpenEnv **oEnv, MDB_env *env) {
+    *oEnv = malloc(sizeof(OpenEnv));
     if(*oEnv == NULL) {
         /**
          * @todo    handle this error some how
@@ -294,7 +362,9 @@ static void internal_create_open_env(struct OpenEnv **oEnv, MDB_env *env) {
     (*oEnv)->oDbi = NULL;
     (*oEnv)->allOpen = false;
 
-    sem_init(&(*oEnv)->writeSem, 0, 1);
+    pthread_mutex_init(&(*oEnv)->writeMutex, NULL);
+    pthread_cond_init(&(*oEnv)->writeCond, NULL);
+    (*oEnv)->writer = 0;
 }
 
 static void internal_create_handle(struct OpenDbi **oDbi, const char *indexName, MDB_dbi dbi) {
@@ -316,45 +386,24 @@ static void internal_find_dbi(struct OpenDbi *oDbi, const char *indexName, struc
     pthread_rwlock_rdlock(&dbiLock);
 }
 
-static void internal_get_dbi(struct OpenDbi *oDbi, const char *indexName, MDB_dbi *dbi) {
+static int internal_get_dbi(struct OpenDbi *oDbi, const char *indexName, MDB_dbi *dbi) {
     struct OpenDbi *out;
     internal_find_dbi(oDbi, indexName, &out);
 
     if(out == NULL) {
-        *dbi = 0;
+        return TRASH_ERROR;
     }
 
     *dbi = out->dbi;
+    return TRASH_SUCCESS;
 }
 
-static struct OpenEnv *internal_get_env_txn(MDB_txn *txn) {
-    struct OpenEnv *result;
-    MDB_env *env;
-    const char *path;
-    
-    env = mdb_txn_env(txn);
-    mdb_env_get_path(env, &path);
-    result = internal_get_env_path(path);
+static OpenEnv *internal_remove_env(const char *path) {
+    OpenEnv *result;
 
-    return result;
-}
-
-static struct OpenEnv *internal_get_env_path(const char *path) {
-    struct OpenEnv *result;
-
-    pthread_rwlock_rdlock(&envLock);
-    HASH_FIND_STR(oEnvs, path, result);
-    pthread_rwlock_unlock(&envLock);
-
-    return NULL;
-}
-
-static struct OpenEnv *internal_remove_env(const char *path) {
-    struct OpenEnv *result;
-
-    result = internal_get_env_path(path);
+    result = get_env_from_path(path);
     if(result != NULL) {
-        pthread_rwlock_wlock(&envLock);
+        pthread_rwlock_wrlock(&envLock);
         HASH_DEL(oEnvs, result);
         pthread_rwlock_unlock(&envLock);
     }
@@ -370,4 +419,6 @@ static int valid(int rc, int line) {
         */
         exit(1);
     }
+    
+    return 0;
 }
