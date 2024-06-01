@@ -4,6 +4,10 @@
 #define VALID(rc) \
     valid(rc, __LINE__) \
 
+#ifdef DEBUG
+int flag = 0;
+#endif
+
 struct OpenDbi {
     const char *name;
     MDB_dbi dbi;
@@ -202,12 +206,18 @@ int open_db(MDB_txn *txn, OpenEnv *oEnv, const char *indexName, MDB_dbi *dbi) {
     int flags = 0;
     int rc;
 
+    // dbi may already exist
+    rc = internal_get_dbi(oEnv->oDbi, indexName, &result);
+    if(rc == 0) {
+        #ifdef DEBUG
+        flag = 1;
+        #endif
+        goto bottom;
+    }
+
     internal_get_dbi(oEnv->oDbi, INDICES, &result);
     VALID(mdb_cursor_open(txn, result, &cur));
     
-    /**
-     * @todo    validate that it is safe to get the len of this
-    */
     key.mv_size = strlen(indexName);
     key.mv_data = indexName;
 
@@ -219,7 +229,7 @@ int open_db(MDB_txn *txn, OpenEnv *oEnv, const char *indexName, MDB_dbi *dbi) {
         begin_write_txn(oEnv);
         // create write txn
         VALID(mdb_txn_begin(oEnv->env, NULL, 0, &tempTxn));
-        flags = MDB_CREATE;
+        flags |= MDB_CREATE;
     }
 
     VALID(mdb_dbi_open(tempTxn, indexName, flags, &result));
@@ -240,7 +250,8 @@ int open_db(MDB_txn *txn, OpenEnv *oEnv, const char *indexName, MDB_dbi *dbi) {
         mdb_txn_renew(txn);
         mdb_cursor_renew(txn, cur);
     }
-    
+
+bottom:
     *dbi = result;
     return TRASH_SUCCESS;
 }
@@ -437,7 +448,7 @@ static void internal_create_handle(struct OpenDbi **oDbi, const char *indexName,
 static void internal_find_dbi(struct OpenDbi *oDbi, const char *indexName, struct OpenDbi **out){
     pthread_rwlock_rdlock(&dbiLock);
     HASH_FIND_STR(oDbi, indexName, *out);
-    pthread_rwlock_rdlock(&dbiLock);
+    pthread_rwlock_unlock(&dbiLock);
 }
 
 static int internal_get_dbi(struct OpenDbi *oDbi, const char *indexName, MDB_dbi *dbi) {

@@ -4,4 +4,6 @@ playground/
 
 build/
 
+*.mdb
+
 .vscode/

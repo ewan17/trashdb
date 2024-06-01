@@ -24,6 +24,7 @@
 
 #ifdef DEBUG
 #define TRASH_DIR ""
+extern int flag;
 #else
 #define TRASH_DIR "/var/local/trashdb/"
 #endif
