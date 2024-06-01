@@ -4,8 +4,6 @@
 #define VALID(rc) \
     valid(rc, __LINE__) \
 
-#define INDICES "indices"
-
 struct OpenDbi {
     const char *name;
     MDB_dbi dbi;
@@ -15,7 +13,7 @@ struct OpenDbi {
 
 // Tracks all the currently open envs
 struct OpenEnv {
-    const char *path;
+    const char *tablename;
     MDB_env *env;
 
     // allows only one write txn for an env
@@ -65,7 +63,7 @@ MDB_env *open_env(char *tableName, size_t dbsize, unsigned int numdbs, unsigned 
     struct OpenEnv *oEnv;
     struct OpenDbi *oDbi;
     struct stat st;
-    char path[256];
+    char filepath[256];
     int rc;
 
     if(internal_validate_tablename(tableName) != 0) {
@@ -76,12 +74,12 @@ MDB_env *open_env(char *tableName, size_t dbsize, unsigned int numdbs, unsigned 
         return env;
     }
 
-    snprintf(path, sizeof(path), "%s%s", TABLE_DIR, tableName);
+    snprintf(filepath, sizeof(filepath), "%s%s/", TABLE_DIR, tableName);
     
-    if(stat(path, &st) < 0) {
+    if(stat(filepath, &st) < 0) {
         if(errno = ENOENT) {
-            if(mkdir(path, 0777) != 0) {
-                printf("here: %s\n", strerror(errno));
+            size_t len = strlen(filepath);
+            if(trash_mkdir(filepath, len, 0755) != 0) {
                 return NULL;
             }
         } else {
@@ -94,7 +92,7 @@ MDB_env *open_env(char *tableName, size_t dbsize, unsigned int numdbs, unsigned 
         return NULL;
     }
 
-    if((rc = mdb_env_open(env, tableName, 0, 0664)) != 0) {
+    if((rc = mdb_env_open(env, filepath, 0, 0664)) != 0) {
         /**
          * @todo    handle the different possible errors for an invalid open
         */ 
@@ -116,7 +114,7 @@ MDB_env *open_env(char *tableName, size_t dbsize, unsigned int numdbs, unsigned 
 
     // add open env struct to env hash map
     pthread_rwlock_wrlock(&envLock);
-    HASH_ADD_STR(oEnvs, path, oEnv);
+    HASH_ADD_STR(oEnvs, tablename, oEnv);
     pthread_rwlock_unlock(&envLock);
 
     return env;
@@ -125,7 +123,7 @@ MDB_env *open_env(char *tableName, size_t dbsize, unsigned int numdbs, unsigned 
 MDB_env *get_env(const char *tableName) {
     struct OpenEnv *result;
 
-    result = get_env_from_path(tableName);
+    result = get_env_from_tablename(tableName);
 
     if(result != NULL) {
         return result->env;
@@ -134,24 +132,30 @@ MDB_env *get_env(const char *tableName) {
     return NULL;
 }
 
+/**
+ * @note    this function is not correct
+ * @todo    make sure all transactions, databases, and cursors are closed before calling this function
+*/
 void close_env(MDB_env *env) {
-    if(env != NULL) {
-        struct OpenEnv *oEnv;
-        const char *path;
-
-        mdb_env_get_path(env, &path);
-        oEnv = internal_remove_env(path);
-
-        struct OpenDbi *curr, *tmp;
-        curr = oEnv->oDbi;
-
-        HASH_ITER(hh, oEnv->oDbi, curr, tmp) {
-            mdb_dbi_close(env, curr->dbi);
-            free(curr);
-        }
-
-        mdb_env_close(env);
+    if(env == NULL) {
+        return;
     }
+    
+    struct OpenEnv *oEnv;
+    const char *path;
+
+    mdb_env_get_path(env, &path);
+    oEnv = internal_remove_env(path);
+
+    struct OpenDbi *curr, *tmp;
+    curr = oEnv->oDbi;
+
+    HASH_ITER(hh, oEnv->oDbi, curr, tmp) {
+        mdb_dbi_close(env, curr->dbi);
+        free(curr);
+    }
+
+    mdb_env_close(env);
 }
 
 bool is_all_open(OpenEnv *oEnv) {
@@ -245,7 +249,7 @@ int get_dbi(const char *tableName, const char *indexName, MDB_dbi *dbi) {
     struct OpenEnv *oEnv;
     int rc;
 
-    oEnv = get_env_from_path(tableName); 
+    oEnv = get_env_from_tablename(tableName); 
 
     rc = internal_get_dbi(oEnv->oDbi, indexName, dbi);
     return rc;
@@ -261,25 +265,73 @@ OpenEnv *get_env_from_cur(MDB_cursor *cur) {
 }
 
 OpenEnv *get_env_from_txn(MDB_txn *txn) {
-    OpenEnv *result;
     MDB_env *env;
     const char *path;
     
     env = mdb_txn_env(txn);
     mdb_env_get_path(env, &path);
-    result = get_env_from_path(path);
-
-    return result;
+    
+    return get_env_from_path(path);
 }
 
-OpenEnv *get_env_from_path(const char *tableName) {
+OpenEnv *get_env_from_tablename(const char *tableName) {
     OpenEnv *result;
-
+    
     pthread_rwlock_rdlock(&envLock);
     HASH_FIND_STR(oEnvs, tableName, result);
     pthread_rwlock_unlock(&envLock);
 
     return result;
+}
+
+OpenEnv *get_env_from_path(const char *path) {
+    char *tableName;
+
+    tablename_from_path(path, &tableName);
+
+    return get_env_from_tablename(tableName);
+}
+
+/**
+ * @todo    path must be null terminated
+*/
+void tablename_from_path(const char *path, char **tablename) {
+    char temp[MAX_DIR_SIZE];
+    size_t len;
+    
+    len = strlen(path);
+    if(len > MAX_DIR_SIZE - 1 || len < 3) {
+        goto error;
+    }
+    snprintf(temp, MAX_DIR_SIZE, "%s", path);
+
+    size_t index = len - 1;
+    if(temp[index] == '/') {
+        index--;
+    }
+
+    size_t tableNameLen = 0;
+    while(temp[index] != '/' && index > 0) {
+        tableNameLen++;
+        index--;
+    }
+    index++;
+
+    if (index == 0 && temp[index] != '/') {
+        goto error;
+    }
+
+    *tablename = (char *) malloc(tableNameLen * sizeof(char));
+    if(*tablename == NULL) {
+        goto error;
+    }
+
+    memcpy(*tablename, &temp[index], tableNameLen);
+    (*tablename)[tableNameLen] = '\0';
+    return;
+
+error:
+    *tablename = NULL;
 }
 
 void begin_write_txn(OpenEnv *oEnv) {
@@ -355,10 +407,12 @@ static void internal_create_open_env(OpenEnv **oEnv, MDB_env *env) {
     }
 
     const char *path;
+    char *tablename;
     mdb_env_get_path(env, &path);
+    tablename_from_path(path, &tablename);
 
     (*oEnv)->env = env;
-    (*oEnv)->path = path;
+    (*oEnv)->tablename = tablename;
     (*oEnv)->oDbi = NULL;
     (*oEnv)->allOpen = false;
 

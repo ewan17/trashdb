@@ -1,23 +1,25 @@
 CC	= gcc
 W = -W -Wall -g
 INCLUDE = ../include ../include/trashdb
-CFLAGS = $(W) $(addprefix -I, $(INCLUDE)) 
+CFLAGS = $(W) $(addprefix -I, $(INCLUDE))
 LDFLAGS = -llmdb
 
 BUILDDIR = ../../build
 
-TARGETS = envx
-
 SRCS = $(wildcard *.c)
 OBJS = $(patsubst %.c,$(BUILDDIR)/%.o,$(SRCS))
+
+TARGETS = testenvx
+
+.PHONY: all clean
 
 clean:
 	rm -rf $(BUILDDIR) $(TARGETS) 
 
-envx: utilities.o envtest.o env.o
-	$(CC) $(CFLAGS) $(addprefix $(BUILDDIR)/,$^) -o $@ $(LDFLAGS)
-
 all: $(OBJS)
+
+testenv = utilities.o envtest.o env.o
+testenv: testenvx
 
 $(BUILDDIR)/%.o: %.c
 	@mkdir -p $(BUILDDIR)
@@ -30,3 +32,9 @@ $(BUILDDIR)/%.o: %.c
 %.o: ../utils/%.c
 	@mkdir -p $(BUILDDIR)
 	$(CC) $(CFLAGS) -c -o $(BUILDDIR)/$@ $<
+
+%x: W += -DDEBUG
+.SECONDEXPANSION:
+%x: $$($$*)
+	@echo $(W)
+	$(CC) $(CFLAGS) $(patsubst %.o,$(BUILDDIR)/%.o,$($*)) -o $@ $(LDFLAGS)
