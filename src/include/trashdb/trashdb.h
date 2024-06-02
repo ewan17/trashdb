@@ -15,12 +15,15 @@
 #include "lmdb.h"
 #include "uthash.h"
 #include "env.h"
+#include "db.h"
 
 #define TRASH_SUCCESS (0)
 #define TRASH_ERROR (-1)
 #define TRASH_EOF (-2)
 
+// these are default values for lmdb
 #define DB_SIZE 10485760
+#define MAX_READERS 126
 
 #ifdef DEBUG
 #define TRASH_DIR ""
@@ -36,6 +39,15 @@ extern int flag;
  * @note    this will change later
 */
 #define MAX_DBS 1
+
+/**
+ * @todo    figure out what these pool size numbers should be
+*/
+#ifdef NOTLS
+#define TXN_POOL_CAPACITY 5
+#endif
+#define TXN_POOL_CAPACITY 5
+#else
 
 /**
  * @note    the open envs and the dbs can be placed in there own env in lmdb, but may be too much overhead to check if they are open in there vs looping list

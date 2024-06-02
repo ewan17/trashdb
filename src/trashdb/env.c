@@ -16,14 +16,20 @@ struct OpenDbi {
 };
 
 // Tracks all the currently open envs
+/**
+ * @todo    the tablename should not be the key, it should be some uuid.
+ * @todo    hash the tablename for the id
+*/
 struct OpenEnv {
     const char *tablename;
     MDB_env *env;
 
     // allows only one write txn for an env
+    #ifdef NOTLS
     pthread_mutex_t writeMutex;
     pthread_cond_t writeCond;
     int writer;
+    #endif
 
     // are all the sub databases for an env open?
     bool allOpen;
@@ -46,6 +52,8 @@ static pthread_rwlock_t envLock, dbiLock = PTHREAD_RWLOCK_INITIALIZER;
 static int valid(int rc, int line);
 
 static int internal_validate_tablename(char *tableName);
+
+static void internal_tablename_from_path(const char *path, char **tablename);
 
 static int internal_set_env_fields(MDB_env *env, size_t dbsize, unsigned int numdbs, unsigned int numthreads);
 
@@ -136,6 +144,13 @@ MDB_env *get_env(const char *tableName) {
     return NULL;
 }
 
+bool env_exists(const char *tableName) {
+    struct OpenEnv *result;
+
+    result = get_env_from_tablename(tableName);
+    return (result != NULL);
+}
+
 /**
  * @note    this function is not correct
  * @todo    make sure all transactions, databases, and cursors are closed before calling this function
@@ -223,10 +238,7 @@ int open_db(MDB_txn *txn, OpenEnv *oEnv, const char *indexName, MDB_dbi *dbi) {
 
     rc = mdb_cursor_get(cur, &key, &data, MDB_SET);
     if(rc == MDB_NOTFOUND) {
-        // stop read txn since we are creating a write txn
-        mdb_txn_reset(txn);
-
-        begin_write_txn(oEnv);
+        write_lock(oEnv);
         // create write txn
         VALID(mdb_txn_begin(oEnv->env, NULL, 0, &tempTxn));
         flags |= MDB_CREATE;
@@ -234,9 +246,8 @@ int open_db(MDB_txn *txn, OpenEnv *oEnv, const char *indexName, MDB_dbi *dbi) {
 
     VALID(mdb_dbi_open(tempTxn, indexName, flags, &result));
     if(flags & MDB_CREATE) {
-        // push changes to db
         mdb_txn_commit(tempTxn);
-        end_write_txn(oEnv);
+        write_unlock(oEnv);
     }
 
     // add the OpenDbi struct to the hashmap
@@ -245,15 +256,38 @@ int open_db(MDB_txn *txn, OpenEnv *oEnv, const char *indexName, MDB_dbi *dbi) {
     HASH_ADD_STR(oEnv->oDbi, name, oDbi);
     pthread_rwlock_unlock(&dbiLock);
 
-    // start up the read txn again if we had to pause for a write txn
-    if(flags & MDB_CREATE) {
-        mdb_txn_renew(txn);
-        mdb_cursor_renew(txn, cur);
-    }
-
+    mdb_cursor_close(cur);
+    
 bottom:
     *dbi = result;
     return TRASH_SUCCESS;
+}
+
+void close_db(const char *tableName, const char *indexName) {
+    OpenEnv *oenv;
+    struct OpenDbi *odbi;
+
+    oenv = get_env_from_tablename(tableName);
+    internal_find_dbi(oenv->oDbi, indexName, &odbi);
+
+    mdb_dbi_close(oenv->env, odbi->dbi);
+}
+
+void close_all(const char *tableName) {
+    OpenEnv *oEnv;
+    struct OpenDbi *curr, *tmp;
+    int rc;
+
+    oEnv = get_env_from_tablename(tableName);
+    curr = oEnv->oDbi;
+
+    HASH_ITER(hh, oEnv->oDbi, curr, tmp) {
+        rc = strcmp(curr->name, INDICES);
+        if(rc != 0) {
+            mdb_dbi_close(oEnv, curr->dbi);
+            free(curr);
+        }
+    }
 }
 
 int get_dbi(const char *tableName, const char *indexName, MDB_dbi *dbi) {
@@ -298,15 +332,36 @@ OpenEnv *get_env_from_tablename(const char *tableName) {
 OpenEnv *get_env_from_path(const char *path) {
     char *tableName;
 
-    tablename_from_path(path, &tableName);
+    internal_tablename_from_path(path, &tableName);
 
     return get_env_from_tablename(tableName);
 }
 
-/**
- * @todo    path must be null terminated
-*/
-void tablename_from_path(const char *path, char **tablename) {
+void write_lock(OpenEnv *oEnv) {
+    #ifdef NOTLS
+    pthread_mutex_lock(&oEnv->writeMutex);
+    while (oEnv->writer) {
+        pthread_cond_wait(&oEnv->writeCond, &oEnv->writeMutex);
+    }
+    oEnv->writer = 1;
+    pthread_mutex_unlock(&oEnv->writeMutex);
+    #endif
+}
+
+void write_unlock(OpenEnv *oEnv) {
+    #ifdef NOTLS
+    pthread_mutex_lock(&oEnv->writeMutex);
+    oEnv->writer = 0;
+    /**
+     * @note    for now we will broadcast even though signal would be more efficient right now
+     * @todo    add other conditions that the writers need to follow. Such as labeling certain writers as higher priority with flags
+    */
+    pthread_cond_broadcast(&oEnv->writeCond);
+    pthread_mutex_unlock(&oEnv->writeMutex);
+    #endif
+}
+
+static void internal_tablename_from_path(const char *path, char **tablename) {
     char temp[MAX_DIR_SIZE];
     size_t len;
     
@@ -314,7 +369,7 @@ void tablename_from_path(const char *path, char **tablename) {
     if(len > MAX_DIR_SIZE - 1 || len < 3) {
         goto error;
     }
-    snprintf(temp, MAX_DIR_SIZE, "%s", path);
+    memcpy(&temp[0], path, len);
 
     size_t index = len - 1;
     if(temp[index] == '/') {
@@ -343,26 +398,6 @@ void tablename_from_path(const char *path, char **tablename) {
 
 error:
     *tablename = NULL;
-}
-
-void begin_write_txn(OpenEnv *oEnv) {
-    pthread_mutex_lock(&oEnv->writeMutex);
-    while (oEnv->writer) {
-        pthread_cond_wait(&oEnv->writeCond, &oEnv->writeMutex);
-    }
-    oEnv->writer = 1;
-    pthread_mutex_unlock(&oEnv->writeMutex);
-}
-
-void end_write_txn(OpenEnv *oEnv) {
-    pthread_mutex_lock(&oEnv->writeMutex);
-    oEnv->writer = 0;
-    /**
-     * @note    for now we will broadcast even though signal would be more efficient right now
-     * @todo    add other conditions that the writers need to follow. Such as labeling certain writers as higher priority with flags
-    */
-    pthread_cond_broadcast(&oEnv->writeCond);
-    pthread_mutex_unlock(&oEnv->writeMutex);
 }
 
 /**
@@ -420,16 +455,18 @@ static void internal_create_open_env(OpenEnv **oEnv, MDB_env *env) {
     const char *path;
     char *tablename;
     mdb_env_get_path(env, &path);
-    tablename_from_path(path, &tablename);
+    internal_tablename_from_path(path, &tablename);
 
     (*oEnv)->env = env;
     (*oEnv)->tablename = tablename;
     (*oEnv)->oDbi = NULL;
     (*oEnv)->allOpen = false;
 
+    #ifdef NOTLS
     pthread_mutex_init(&(*oEnv)->writeMutex, NULL);
     pthread_cond_init(&(*oEnv)->writeCond, NULL);
     (*oEnv)->writer = 0;
+    #endif
 }
 
 static void internal_create_handle(struct OpenDbi **oDbi, const char *indexName, MDB_dbi dbi) {
