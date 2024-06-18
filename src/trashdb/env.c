@@ -1,9 +1,6 @@
 #include "trashdb.h"
 #include "utilities.h"
 
-#define VALID(rc) \
-    valid(rc, __LINE__) \
-
 #ifdef DEBUG
 int flag = 0;
 #endif
@@ -44,12 +41,6 @@ static struct OpenEnv *oEnvs = NULL;
 
 // read-write locks for the env and db handler mappings
 static pthread_rwlock_t envLock, dbiLock = PTHREAD_RWLOCK_INITIALIZER;
-
-/**
- * @note    this function needs work
- * @todo    add logging for errors and figure out what the return errors should be if any
-*/
-static int valid(int rc, int line);
 
 static int internal_validate_tablename(char *tableName);
 
@@ -116,8 +107,8 @@ MDB_env *open_env(char *tableName, size_t dbsize, unsigned int numdbs, unsigned 
     internal_create_open_env(&oEnv, env);
 
     // open the unnamed db
-    VALID(mdb_txn_begin(env, NULL, MDB_RDONLY, &txn));
-    VALID(mdb_dbi_open(txn, NULL, 0, &unDbi));
+    assert(mdb_txn_begin(env, NULL, MDB_RDONLY, &txn) == 0);
+    assert(mdb_dbi_open(txn, NULL, 0, &unDbi) == 0);
     mdb_txn_abort(txn);
 
     // create unnamed db key/value
@@ -188,7 +179,7 @@ void open_all(MDB_txn *txn, OpenEnv *oEnv) {
     int rc;
 
     internal_get_dbi(oEnv->oDbi, INDICES, &dbi);
-    VALID(mdb_cursor_open(txn, dbi, &cur));
+    assert(mdb_cursor_open(txn, dbi, &cur) == 0);
 
     pthread_rwlock_wrlock(&dbiLock);
     while((rc = mdb_cursor_get(cur, &key, &val, MDB_NEXT)) == 0) {
@@ -200,7 +191,7 @@ void open_all(MDB_txn *txn, OpenEnv *oEnv) {
         HASH_FIND_STR(oEnv->oDbi, indexName, handle);
 
         if(handle == NULL) {
-            VALID(mdb_dbi_open(txn, indexName, 0, &dbi));
+            assert(mdb_dbi_open(txn, indexName, 0, &dbi) == 0);
 
             internal_create_handle(&handle, indexName, dbi);
             HASH_ADD_STR(oEnv->oDbi, name, handle);
@@ -231,7 +222,7 @@ int open_db(MDB_txn *txn, OpenEnv *oEnv, const char *indexName, MDB_dbi *dbi) {
     }
 
     internal_get_dbi(oEnv->oDbi, INDICES, &result);
-    VALID(mdb_cursor_open(txn, result, &cur));
+    assert(mdb_cursor_open(txn, result, &cur) == 0);
     
     key.mv_size = strlen(indexName);
     key.mv_data = indexName;
@@ -240,11 +231,11 @@ int open_db(MDB_txn *txn, OpenEnv *oEnv, const char *indexName, MDB_dbi *dbi) {
     if(rc == MDB_NOTFOUND) {
         write_lock(oEnv);
         // create write txn
-        VALID(mdb_txn_begin(oEnv->env, NULL, 0, &tempTxn));
+        assert(mdb_txn_begin(oEnv->env, NULL, 0, &tempTxn) == 0);
         flags |= MDB_CREATE;
     }
 
-    VALID(mdb_dbi_open(tempTxn, indexName, flags, &result));
+    assert(mdb_dbi_open(tempTxn, indexName, flags, &result) == 0);
     if(flags & MDB_CREATE) {
         mdb_txn_commit(tempTxn);
         write_unlock(oEnv);
@@ -511,16 +502,4 @@ static OpenEnv *internal_remove_env(const char *path) {
     }
 
     return result;
-}
-
-static int valid(int rc, int line) {
-    if(rc != 0) {
-        /**
-         * @todo    add some error here
-         * @todo    use a logging setup
-        */
-        exit(1);
-    }
-    
-    return 0;
 }

@@ -3,6 +3,9 @@
 
 struct Readers {
     const char *tablename;
+    /**
+     * @todo    add support for cursors
+     */
     TrashTxn *txns[TXN_POOL_CAPACITY];
     size_t numTxns;
 
@@ -15,6 +18,7 @@ struct Readers {
 
 struct TrashTxn {
     MDB_txn *txn;
+    bool commit;
     struct Readers *rdrs;
 };
 
@@ -43,11 +47,19 @@ TrashTxn *begin_txn(const char *tablename, TrashTxn *parent, bool write) {
     int rc, flags;
 
     env = get_env(tablename);
+    if(env == NULL) {
+        env = open_env(tablename, DB_SIZE, NUM_DBS, MAX_READERS);
+        assert(env != NULL);
+    }
     
     flags = 0;
     ptxn = NULL;
     if(!write) {
         if(parent != NULL) {
+            /**
+             * @todo    add support for nested txns later
+             */
+            assert(0);
             // nested txns do not get stored in the readers struct
             ptxn = parent->txn;
             flags = MDB_RDONLY;
@@ -58,40 +70,33 @@ TrashTxn *begin_txn(const char *tablename, TrashTxn *parent, bool write) {
     }
 
     rc = mdb_txn_begin(env, ptxn, flags, &txn);
-    if(rc != 0) {
-        /**
-         * @todo    handle error
-        */
-        exit(1);
-    }
+    assert(rc == 0);
+
     internal_create_trash_txn(&tt, txn, NULL);
     
-
 bottom:
     return tt;
 }
 
-void end_txn(TrashTxn *tt, bool commit) {
-    if(commit) {
-        mdb_txn_commit(tt->txn);
-    } else {
-        mdb_txn_abort(tt->txn);
-    }
+void return_txn(TrashTxn *tt) {
+    struct Readers *rdrs = tt->rdrs;
 
-    free(tt);
-}
+    if(rdrs == NULL) {
+        // write txn
+        if(tt->commit) {
+            mdb_txn_commit(tt->txn);
+        } else {
+            mdb_txn_abort(tt->txn);
+        }
 
-void return_read_txn(TrashTxn *tt) {
-    struct Readers *rdrs;
-    bool isFull;
-
-    if((rdrs = tt->rdrs) == NULL) {
-        // this is a write txn
+        free(tt);
         return;
     }
-    isFull = true;
+
+    bool isFull = true;
 
     mdb_txn_reset(tt->txn);
+    tt->commit = false;
 
     rdrs_lock(rdrs);
     if(rdrs->numTxns != TXN_POOL_CAPACITY) {
@@ -110,37 +115,57 @@ void return_read_txn(TrashTxn *tt) {
     }
 }
 
-int trash_put(MDB_dbi dbi, MDB_val *key, MDB_val *val, unsigned int flags) {
+/**
+ * @todo    flags need to be checked with how the dbi was opened initially
+ */
+int trash_put(TrashTxn *tt, MDB_dbi dbi, MDB_val *key, MDB_val *val, unsigned int flags) {
+    int rc;
     
+    if(tt->rdrs != NULL) {
+        return TRASH_ERROR;
+    }
+
+    rc = mdb_put(tt->txn, dbi, key, val, flags);
+    assert(rc == 0);
+
+    tt->commit = true;
+
+    return TRASH_SUCCESS;
 }
 
-int trash_get() {
+int trash_get(TrashTxn *tt, MDB_dbi dbi, MDB_val *key, MDB_val *val) {
+    int rc;
+    
+    rc = mdb_get(tt->txn, dbi, key, val);
+    assert(rc == 0);
 
-}
+    return TRASH_SUCCESS;
+}   
 
 static TrashTxn *internal_get_read_txn(const char *tablename) {
     struct Readers *rdrs;
-    TrashTxn *tt = NULL;
 
     rdrs = internal_get_readers(tablename);
     if(rdrs == NULL) {
-        if(!env_exists(tablename)) {
-            goto bottom;
-        }
         internal_create_readers(&rdrs, tablename);
     }
 
+    TrashTxn *tt;
+
+    rdrs_lock(rdrs);
     if(rdrs->numTxns == 0) {
+        rdrs_unlock(rdrs);
         /**
-         * @todo    create a read txn
-         * @note    how many additional txns can we create? this will effect the max readers that was set for the env on open
-        */
+         * @note    this should never happen
+         */
+        assert(0);
     } else {
         tt = rdrs->txns[--rdrs->numTxns];
+        rdrs_unlock(rdrs);
+
         mdb_txn_renew(tt->txn);
     }
 
-bottom:
     return tt;
 }
 
@@ -155,6 +180,7 @@ static void internal_create_trash_txn(TrashTxn **tt, MDB_txn *txn, struct Reader
 
     (*tt)->txn = txn;
     (*tt)->rdrs = rdrs;
+    (*tt)->commit = false;
 }
 
 static struct Readers *internal_get_readers(const char *tablename) {
@@ -231,3 +257,9 @@ static void pool_unlock() {
     pthread_rwlock_unlock(&rdrPoolLock);
     #endif
 };
+
+#ifdef DEBUG
+MDB_txn *get_trash_txn(TrashTxn *tt) {
+    return tt->txn;
+}
+#endif

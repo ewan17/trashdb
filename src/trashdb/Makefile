@@ -9,7 +9,7 @@ BUILDDIR = ../../build
 SRCS = $(wildcard *.c)
 OBJS = $(patsubst %.c,$(BUILDDIR)/%.o,$(SRCS))
 
-TARGETS = testenvx
+TARGETS = testenvx testdbx
 
 .PHONY: all clean
 
@@ -20,6 +20,9 @@ all: $(OBJS)
 
 testenv = utilities.o envtest.o env.o
 testenv: testenvx
+
+testdb = utilities.o dbtest.o db.o env.o
+testdb: testdbx
 
 $(BUILDDIR)/%.o: %.c
 	@mkdir -p $(BUILDDIR)

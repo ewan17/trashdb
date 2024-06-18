@@ -1,0 +1,54 @@
+State 0:
+          prog ::= * obj
+          obj ::= * LBRACE RBRACE
+          obj ::= * LBRACE data RBRACE
+
+                        LBRACE shift        1      
+                          prog accept
+                           obj shift        3      
+
+State 1:
+          obj ::= LBRACE * RBRACE
+          obj ::= LBRACE * data RBRACE
+          data ::= * NUM
+          data ::= * STRING
+
+                        RBRACE shift-reduce 0      obj ::= LBRACE RBRACE
+                           NUM shift-reduce 2      data ::= NUM
+                        STRING shift-reduce 3      data ::= STRING
+                          data shift        2      
+
+State 2:
+          obj ::= LBRACE data * RBRACE
+
+                        RBRACE shift-reduce 1      obj ::= LBRACE data RBRACE
+
+State 3:
+      (4) prog ::= obj *
+
+                             $ reduce       4      prog ::= obj
+
+----------------------------------------------------
+Symbols:
+The first-set of non-terminals is shown after the name.
+
+    0: $:
+    1: LBRACE
+    2: RBRACE
+    3: NUM
+    4: STRING
+    5: prog: LBRACE
+    6: obj: LBRACE
+    7: data: NUM STRING
+----------------------------------------------------
+Syntax-only Symbols:
+The following symbols never carry semantic content.
+
+$ LBRACE RBRACE NUM STRING prog obj
+----------------------------------------------------
+Rules:
+   0: obj ::= LBRACE RBRACE.
+   1: obj ::= LBRACE data RBRACE.
+   2: data ::= NUM.
+   3: data ::= STRING.
+   4: prog ::= obj.

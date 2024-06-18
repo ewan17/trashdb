@@ -11,6 +11,7 @@
 #include <stdbool.h>
 #include <semaphore.h>
 #include <regex.h>
+#include <assert.h>
 
 #include "lmdb.h"
 #include "uthash.h"
@@ -21,9 +22,13 @@
 #define TRASH_ERROR (-1)
 #define TRASH_EOF (-2)
 
+extern unsigned int workerThreads;
+
 // these are default values for lmdb
 #define DB_SIZE 10485760
-#define MAX_READERS 126
+// this should be the number of threads that we have running
+#define MAX_READERS workerThreads
+#define NUM_DBS 50
 
 #ifdef DEBUG
 #define TRASH_DIR ""
@@ -44,27 +49,11 @@ extern int flag;
  * @todo    figure out what these pool size numbers should be
 */
 #ifdef NOTLS
-#define TXN_POOL_CAPACITY 5
-#endif
-#define TXN_POOL_CAPACITY 5
+// the max readers we can have 
+#define TXN_POOL_CAPACITY workerThreads
 #else
-
-/**
- * @note    the open envs and the dbs can be placed in there own env in lmdb, but may be too much overhead to check if they are open in there vs looping list
- * @note    honestly this looping could be bad
- * @todo    fix later
-*/
-
-// typedef struct TrashThread {
-//     pthread_t tid;
-    
-
-//     TrashData *td;
-//     // original set to NULL until the message is parsed
-//     char *tablename;
-//     char *indexname;
-
-//     MDB_txn *txn;
-// } TrashThread;
+// only one read thread when working with thread local storage
+#define TXN_POOL_CAPACITY 1
+#endif
 
 #endif //TRASH_H
