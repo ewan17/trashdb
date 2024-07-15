@@ -36,7 +36,7 @@ $(BUILDDIR)/%.o: %.c
 	@mkdir -p $(BUILDDIR)
 	$(CC) $(CFLAGS) -c -o $(BUILDDIR)/$@ $<
 
-%x: W += -DDEBUG
+%x: W += -DTEST
 .SECONDEXPANSION:
 %x: $$($$*)
 	@echo $(W)

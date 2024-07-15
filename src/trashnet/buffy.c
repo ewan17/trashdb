@@ -8,16 +8,6 @@ enum CurrEv {
     WRITE_EV,
 };
 
-struct SendBuff {
-    size_t endPtr;
-    size_t startPtr;
-    size_t sendBuffSize;
-
-    char *sendBuff;
-
-    pthread_mutex_t sbMutex;
-};
-
 /*
     @todo   SSL/TLS; use OpenSSL library 
     @todo   maybe add mdb txn or db env
@@ -26,25 +16,23 @@ struct TrashData {
     int fd;
     enum CurrEv curr;
     struct event *ev;
-    SSL *ctx;
 
+    /**
+     * @note    mutex is necessary if multiple threads are working with an event
+     */
     pthread_mutex_t tdMutex;
 
-    char *dbname;
-    char *username;
+    bool startup;
 
-    size_t remainingMsg;
-    Message *msg;
-    bool partialMsg;
+    size_t remainingBytes;
+    TBuffer *in;
 
-    SendBuff *sendBuff;
+    TBuffer *out;
 
     size_t recvBuffLen;
     size_t recvBuffPtr;
     char recvBuff[RECV_BUFFY_SIZE];
 };
-
-static SendBuff *init_send_buff(size_t sendBuffSize);
 
 static void close_client_internal(TrashData *td);
 static void buffer_read_cb(evutil_socket_t fd, short flags, void *arg);
@@ -271,11 +259,7 @@ get_more_data:
         td->partialMsg = (td->remainingMsg > 0);
     }
 
-    if(!td->partialMsg) {
-        // the enitre message fit within the recv buffer
-        // no need to go get more data
-        
-    } else {
+    if(td->partialMsg) {
         add_bytes_to_message(msg, td->recvBuff + td->recvBuffPtr, availBytes);
 
         if(td->remainingMsg > 0) {
@@ -284,10 +268,6 @@ get_more_data:
             td->partialMsg = false;
         }
     }
-
-    
-
-
 
     /**
      * @note    echo server for now
@@ -325,32 +305,6 @@ static void buffer_write_cb(evutil_socket_t fd, short flags, void *arg) {
         pthread_mutex_unlock(&sb->sbMutex);
     }
 };
-
-static SendBuff *init_send_buff(size_t sendBuffSize) {
-    SendBuff *buff;
-    buff = (SendBuff *)malloc(sizeof(SendBuff *));
-    if (buff == NULL) {
-        return NULL;
-    }
-
-    buff->sendBuff = (char *) malloc(sendBuffSize * sizeof(char));
-    if(buff->sendBuff == NULL) {
-        free(buff);
-        return NULL;
-    }
-
-    buff->sendBuffSize = sendBuffSize;
-    buff->endPtr = buff->startPtr = 0;
-
-    if(pthread_mutex_init(&buff->sbMutex, NULL) != 0) {
-        free(buff->sendBuff);
-        free(buff);
-        return NULL;
-    }
-
-    return buff;
-}
-
 
 /**
  * Helper function to retrieve bytes from the kernel and add them to the recv buffer

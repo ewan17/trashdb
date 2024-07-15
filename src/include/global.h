@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <assert.h>
 
 #include "utilities.h"
 

@@ -32,6 +32,9 @@ int data_send(TrashData *td);
 
 bool trash_flush(TrashData *td);
 
+/**
+ * @note    this should be revised
+ */
 #define LOCK(sb) (pthread_mutex_lock(&sb->sbMutex))
 #define UNLOCK(sb) (pthread_mutex_unlock(&sb->sbMutex))
 

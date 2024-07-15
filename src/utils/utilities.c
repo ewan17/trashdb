@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <regex.h>
 
 #include "utilities.h"
 
@@ -17,6 +18,75 @@ void *trash_realloc(void *ptr, size_t needed) {
         free(ptr);
     }
     return newPtr;
+}
+
+/**
+ * @note    currently broken
+*/
+int validate_filename(const char *filename) {
+    regex_t regex;
+    int regExp;
+
+    /**
+     * @note    this does not work "^[A-Za-z._-]+$"
+     * @todo    fix this later
+    */
+    regExp = regcomp(&regex, "", 0);
+    if(regExp != 0) {
+        return -1;
+    }
+
+    regExp = regexec(&regex, filename, 0, NULL, 0);
+    if(filename == NULL || regExp == REG_NOMATCH) {
+        regfree(&regex);
+        return -1;
+    }
+
+    regfree(&regex);
+
+    return 0;
+}
+
+/**
+ * @note    this function needs some work on the return values
+ */
+void internal_filename_from_path(const char *path, char **filename) {
+    char temp[MAX_DIR_SIZE];
+    size_t len;
+    
+    len = strlen(path);
+    if(len > MAX_DIR_SIZE - 1 || len < 3) {
+        goto error;
+    }
+    memcpy(&temp[0], path, len);
+
+    size_t index = len - 1;
+    if(temp[index] == '/') {
+        index--;
+    }
+
+    size_t filenameLen = 0;
+    while(temp[index] != '/' && index > 0) {
+        filenameLen++;
+        index--;
+    }
+    index++;
+
+    if (index == 0 && temp[index] != '/') {
+        goto error;
+    }
+
+    *filename = (char *) malloc(filenameLen * sizeof(char));
+    if(*filename == NULL) {
+        goto error;
+    }
+
+    memcpy(*filename, &temp[index], filenameLen);
+    (*filename)[filenameLen] = '\0';
+    return;
+
+error:
+    *filename = NULL;
 }
 
 int trash_mkdir(const char *path, size_t len, mode_t mode) {

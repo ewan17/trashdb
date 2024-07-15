@@ -10,7 +10,6 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <semaphore.h>
-#include <regex.h>
 #include <assert.h>
 
 #include "lmdb.h"
@@ -22,6 +21,8 @@
 #define TRASH_ERROR (-1)
 #define TRASH_EOF (-2)
 
+// we currently only support one env
+extern char *filename;
 extern unsigned int workerThreads;
 
 // these are default values for lmdb
@@ -30,9 +31,8 @@ extern unsigned int workerThreads;
 #define MAX_READERS workerThreads
 #define NUM_DBS 50
 
-#ifdef DEBUG
+#ifdef TEST
 #define TRASH_DIR ""
-extern int flag;
 #else
 #define TRASH_DIR "/var/local/trashdb/"
 #endif

@@ -1,213 +1,565 @@
 #include "trashdb.h"
-#include "utilities.h"
+#include "il.h"
+
+#define META_META "meta_meta"
+#define META_META_LEN strlen(META_META)
+
+#define INVALID_DB_ID -1
+
+// this is metadata that is stored in the lmdb file
+// can be accessed with lmdb txn and then deserialized
+struct EnvMeta {
+    /**
+     * @todo    add metadata fields later
+     */
+};
+
+// this is metadata that is stored in the lmdb file
+// can be accessed with lmdb txn and then deserialized
+struct DbMeta {
+    // the flags used to open the db
+    unsigned int flags;
+    /**
+     * @todo add additional values when neeeded
+     */
+};
+
+// Tracks all the currently open envs
+/**
+ * @todo    the filename should not be the key, it should be some uuid.
+ * @todo    hash the filename for the id
+*/
+typedef struct OpenEnv {
+    MDB_env *env;
+    // flags applied to open db
+    unsigned int envFlags;
+    // list of open dbs
+    struct LL dbs;
+    pthread_rwlock_t envLock;
+};
+
+// the open databases that are mainly for store the db id
+// the db id can be different if you re open the env
+struct OpenDb {
+    IL move;
+    // db name
+    const char *name;
+    // flags applied to open db
+    unsigned int flags;
+    // db handler id
+    MDB_dbi id;
+    // num of threads currently using db id
+    uint8_t count;
+    pthread_mutex_t odbMutex;
+};
 
 struct Readers {
-    const char *tablename;
-    /**
-     * @todo    add support for cursors
-     */
+    MDB_cursor *iCurr;
+    
+    // although we only have one txn per thread, we may use nested txns
     TrashTxn *txns[TXN_POOL_CAPACITY];
     size_t numTxns;
-
-    #ifdef NOTLS
-    pthread_spinlock_t spinner;
-    #endif
-
-    UT_hash_handle hh;
 };
 
-struct TrashTxn {
-    MDB_txn *txn;
-    bool commit;
-    struct Readers *rdrs;
-};
+/** INTERNAL FUNCTIONS **/
+static void init_metadata();
 
-static TrashTxn *internal_get_read_txn(const char *tablename);
+static void internal_create_open_env(struct OpenEnv **oEnv, MDB_env *env);
+static int internal_set_env_fields(MDB_env *env, size_t dbsize, unsigned int numdbs, unsigned int numthreads);
 
-static void internal_create_trash_txn(TrashTxn **tt, MDB_txn *txn, struct Readers *rdrs);
+static int db_match(struct OpenDb *db, const char *dbname);
+static void internal_add_db(struct OpenDb **db, const char *dbname, MDB_dbi id, struct DbMeta *meta);
+static void internal_close_db(const char *dbname);
 
-static void internal_create_readers(struct Readers **rdrs, const char *tablename);
+static void internal_begin_txn(TrashTxn **tt, int rd);
+static TrashTxn *internal_get_read_txn();
+static void internal_create_trash_txn(TrashTxn **tt, MDB_txn *txn, int rdwr);
+static void internal_create_readers();
 
-static void rdrs_lock(struct Readers *rdrs);
-static void rdrs_unlock(struct Readers *rdrs);
-static void pool_lock(bool write);
-static void pool_unlock();
-
-#ifdef NOTLS
-static struct Readers *rdrPool = NULL;
-static pthread_rwlock_t rdrPoolLock = PTHREAD_RWLOCK_INITIALIZER;
-#else
+// environment that is open
+static struct OpenEnv *oEnv = NULL;
+// tls for the reader txns
 static __thread struct Readers *rdrPool = NULL;
-#endif
 
-TrashTxn *begin_txn(const char *tablename, TrashTxn *parent, bool write) {
+/**
+ * @todo    this function needs logging for errors
+ * @todo    check the length of the file name or pass the length of the filename as a parameter in the function
+*/
+MDB_env *open_env(size_t dbsize, unsigned int numdbs, unsigned int numthreads) {
     MDB_env *env;
-    MDB_txn *txn, *ptxn;
-    TrashTxn *tt;
-    int rc, flags;
+    struct OpenEnv *oEnv;
+    struct stat st;
+    char filepath[256];
+    int rc;
 
-    env = get_env(tablename);
-    if(env == NULL) {
-        env = open_env(tablename, DB_SIZE, NUM_DBS, MAX_READERS);
-        assert(env != NULL);
+    if(internal_validate_filename(filename) != 0) {
+        return NULL;
+    }   
+
+    if((env = get_env(filename)) != NULL) {
+        return env;
     }
+
+    snprintf(filepath, sizeof(filepath), "%s%s/", TABLE_DIR, filename);
     
-    flags = 0;
-    ptxn = NULL;
-    if(!write) {
-        if(parent != NULL) {
-            /**
-             * @todo    add support for nested txns later
-             */
-            assert(0);
-            // nested txns do not get stored in the readers struct
-            ptxn = parent->txn;
-            flags = MDB_RDONLY;
+    if(stat(filepath, &st) < 0) {
+        if(errno = ENOENT) {
+            size_t len = strlen(filepath);
+            if(trash_mkdir(filepath, len, 0755) != 0) {
+                return NULL;
+            }
         } else {
-            tt = internal_get_read_txn(tablename);
-            goto bottom;
+            return NULL;
         }
     }
 
-    rc = mdb_txn_begin(env, ptxn, flags, &txn);
-    assert(rc == 0);
+    mdb_env_create(&env);
+    if((rc = internal_set_env_fields(env, dbsize, numdbs, numthreads)) != TRASH_SUCCESS) {
+        return NULL;
+    }
 
-    internal_create_trash_txn(&tt, txn, NULL);
-    
-bottom:
-    return tt;
+    if((rc = mdb_env_open(env, filepath, MDB_NOSYNC | MDB_NOMETASYNC, 0664)) != 0) {
+        /**
+         * @todo    handle the different possible errors for an invalid open
+        */ 
+        mdb_env_close(env);
+        assert(0);
+    };
+
+    // setup open env struct
+    internal_create_open_env(&oEnv, env);
+    // open/create metadata db
+    init_metadata(env);
+
+    return env;
 }
 
-void return_txn(TrashTxn *tt) {
-    struct Readers *rdrs = tt->rdrs;
+/**
+ * @todo    this needs to be completed.
+ * @note    all txns, dbs, cursors must be closed before calling
+ * @note    only one thread can call this function
+ */
+void close_env() {
 
-    if(rdrs == NULL) {
+}
+
+int begin_txn(TrashTxn **tt, const char *dbname, int rd) {
+    int rc;
+
+    internal_begin_txn(tt, rd);
+    rc = change_txn_db(*tt, dbname);
+    return rc;
+}
+
+int change_txn_db(TrashTxn *tt, const char *dbname) {
+    struct OpenDb *db = NULL;
+    int rc;
+
+    rc = db_match(tt->db, dbname);
+    if(rc != TRASH_ERROR) {
+        return rc;
+    }
+    
+    // check if the db is in oEnv db list
+    pthread_rwlock_rdlock(&oEnv->envLock);
+    IL *curr;
+    for_each(&oEnv->dbs.head, curr) {
+        struct OpenDb *tempdb;
+        tempdb = CONTAINER_OF(curr, struct OpenDb, move);
+        if(db_match(tempdb, dbname) == TRASH_SUCCESS) {
+            db = tempdb;
+            break;
+        }
+    }
+    pthread_rwlock_unlock(&oEnv->envLock);
+
+    if(db == NULL) {
+        // return if the db does not exist
+        return DB_DNE;
+    }
+
+    pthread_mutex_lock(&db->odbMutex);
+    // count the number of txns that are using this db
+    db->count++;
+    pthread_mutex_unlock(&db->odbMutex);
+    
+    tt->db = db;
+    
+    return TRASH_SUCCESS;
+}
+
+/**
+ * @note    lets work with these later
+ */
+// int nest_txn(TrashTxn **tt, const char *db, TrashTxn *pTxn) {
+//     MDB_env *env;
+//     MDB_txn *txn;
+//     int rc;
+//     env = get_env_from_txn(pTxn->txn);
+//     rc = mdb_txn_begin(env, pTxn, MDB_RDONLY, txn);
+//     assert(rc == 0);
+//     internal_create_trash_txn(tt, txn, TRASH_RD_TXN);
+//     rc = change_txn_db(*tt, db);
+//     return rc;
+// }
+
+void return_txn(TrashTxn *tt) {
+    struct OpenDb *db;
+
+    if(tt->flags & TRASH_TXN_COMMIT) {
+        mdb_txn_commit(tt->txn);
+    }
+
+    if(tt->flags & TRASH_WR_TXN) {
         // write txn
-        if(tt->commit) {
-            mdb_txn_commit(tt->txn);
-        } else {
+        // abort if the txn was not commited
+        if(!(tt->flags & TRASH_TXN_COMMIT)) {
             mdb_txn_abort(tt->txn);
         }
 
         free(tt);
-        return;
+    } else {
+        // read txn
+        mdb_txn_reset(tt->txn);
+        tt->flags &= ~TRASH_TXN_COMMIT;
+
+        if(tt->flags & TRASH_TXN_FIN) {
+            if(rdrPool->numTxns != TXN_POOL_CAPACITY) {
+                rdrPool->txns[rdrPool->numTxns++] = tt;
+            }
+        }   
     }
 
-    bool isFull = true;
+    db = tt->db;
+    pthread_mutex_lock(&db->odbMutex);
+    // txn is no longer using db
+    db->count--;
+    pthread_mutex_unlock(&db->odbMutex);
+}
 
-    mdb_txn_reset(tt->txn);
-    tt->commit = false;
+void create_cursor(MDB_cursor **curr, TrashTxn *tt) {
+    int rc;
 
-    rdrs_lock(rdrs);
-    if(rdrs->numTxns != TXN_POOL_CAPACITY) {
-        isFull = false;
-        rdrs->txns[rdrs->numTxns++] = tt;
+    if(tt == NULL) {
+        tt = internal_get_read_txn();
     }
-    rdrs_unlock(rdrs);
 
-    if(isFull) {
-        // this will only be true if we want to declare a txn when there are no more available read txns
-        /**
-         * @note    idk if this is a bad idea though
-        */
-        mdb_txn_abort(tt->txn);
-        free(tt);
+    if(tt->db == NULL) {
+        // defualts to the metadata db if not set
+        change_txn_db(tt, METADATA);
     }
+
+    // if read txn and metadata db is set, renew the cursor
+    if(rdrPool != NULL && (tt->flags & TRASH_RD_TXN) && db_match(tt->db, METADATA) == 0) {
+        // currently only renew txns that are read only for the metadata db
+        assert(mdb_cursor_renew(tt->txn, rdrPool->iCurr) == 0);
+        *curr = rdrPool->iCurr;
+    } else {
+        rc = mdb_cursor_open(tt->txn, tt->db->id, curr);
+        assert(rc == 0);
+    }
+}
+
+/**
+ * If the db flags are in the metadata db, then those will be used.
+ * If the db is not created yet, then the flags will have the MDB_CREATE and whatever other flags are passed in
+ * 
+ * @todo    make sure only one thread is opening the requested database at a time
+ * @todo    make sure the database is not being closed and opened at the same time as well
+ */
+void open_db(TrashTxn *tt, const char *dbname, unsigned int flags) {
+    MDB_env *env;
+    MDB_dbi id;
+    MDB_cursor *curr;
+    TrashTxn *temp = tt;
+    MDB_val key, data;
+
+    struct OpenDb *db;
+    struct DbMeta dbMeta;
+
+    int rc;
+
+    // ensure the txn passed in is set to the metadata db to read the dbs
+    change_txn_db(temp, METADATA);
+    create_cursor(&curr, tt);
+
+    key.mv_size = strlen(dbname);
+    key.mv_data = dbname;
+
+    // check if the db is in the metadata db 
+    // if not in db, create it
+    rc = mdb_cursor_get(curr, &key, &data, MDB_SET);
+    if(rc == MDB_NOTFOUND) {
+        if(tt->flags & TRASH_RD_TXN) {
+            /**
+             * @note    txn cannot be open during write, reset then renew
+             * @todo    confirm the reset and renew is ok
+             */
+            mdb_txn_reset(tt->txn);
+            // create write txn with the metadata db set
+            begin_txn(&temp, METADATA, TRASH_WR_TXN);
+        }
+        // since this is first time opening db, malloc dbMeta and set create flag
+        dbMeta.flags = flags;
+        flags |= MDB_CREATE;
+    } else if(rc == 0) {
+        // db was found
+        // deserialize the key/value pair from the db metadata
+        memcpy(&dbMeta, data.mv_data, data.mv_size);
+        flags &= dbMeta.flags;
+    } else {
+        // should not get to this point
+        assert(0);
+    }
+
+    // creates the desired db
+    assert(mdb_dbi_open(temp->txn, dbname, flags, &id) == 0);
+
+    // if dbMeta is not NULL,
+    // new db needs to be created and committed within the write txn
+    if(flags & MDB_CREATE) {
+        // remove the MDB_CREATE flag before storing the flags in the metadata db
+        flags &= ~MDB_CREATE;
+        // append the new db information into the metadata db
+        rc = trash_put(temp, key.mv_data, key.mv_size, (void *)&dbMeta, sizeof(dbMeta), 0);
+        assert(rc == 0);
+        // commit the created db if the calling function did not pass a write txn
+        if(temp != tt) {
+            return_txn(temp);
+        }
+        // renew the read txn that we had to reset
+        mdb_txn_renew(tt->txn);
+    }
+
+    // add db to the env map
+    internal_add_db(&db, dbname, id, &dbMeta);
+    tt->db = db;
 }
 
 /**
  * @todo    flags need to be checked with how the dbi was opened initially
  */
-int trash_put(TrashTxn *tt, MDB_dbi dbi, MDB_val *key, MDB_val *val, unsigned int flags) {
+int trash_put(TrashTxn *tt, void *key, size_t keyLen, void *val, size_t valLen, unsigned int flags) {
+    MDB_val keyData, valData;
+
     int rc;
     
-    if(tt->rdrs != NULL) {
+    if(tt->flags & TRASH_RD_TXN) {
         return TRASH_ERROR;
     }
 
-    rc = mdb_put(tt->txn, dbi, key, val, flags);
-    assert(rc == 0);
+    keyData.mv_size = keyLen;
+    keyData.mv_data = key;
+    valData.mv_size = valLen;
+    valData.mv_data = val;
 
-    tt->commit = true;
+    rc = mdb_put(tt->txn, tt->db->id, &keyData, &valData, flags);
+    if(rc == 0) {
+        tt->flags |= TRASH_TXN_COMMIT;
+    }
+    return rc;
+}
 
+int trash_get(TrashTxn *tt, void *key, size_t keyLen, MDB_val *data) {
+    MDB_val keyData;
+
+    int rc;
+
+    keyData.mv_size = keyLen;
+    keyData.mv_data = key;
+    
+    rc = mdb_get(tt->txn, tt->db->id, key, data);
+    return rc;
+}
+
+/**
+ * Should only be called on startup.
+ */
+static void init_metadata() {
+    TrashTxn *tt;
+
+    MDB_dbi dbi;
+    MDB_val key, val;
+    MDB_cursor *curr;
+
+    struct OpenDb *db;
+    struct EnvMeta envMeta;
+    struct DbMeta dbMeta;
+
+    int rc;
+
+    // create write txn
+    rc = begin_txn(&tt, METADATA, TRASH_WR_TXN);
+    // the db should not currently be in the list of open dbs
+    if(rc == DB_DNE) {
+        open_db(tt, METADATA, MDB_CREATE);
+    }
+
+    /**
+     * @note    add env metadata here
+     */
+
+    // if this is first time opening the env, create the metadata key/val pair
+    // do not overwrite if it already exists
+    rc = trash_put(tt, META_META, META_META_LEN, (void *) &envMeta, sizeof(envMeta), MDB_NOOVERWRITE);
+    if(rc == 0) {
+        // added meta fields
+        // return txn
+        return_txn(tt);
+    }
+
+    if(rc != MDB_KEYEXIST) {
+        // should not get here
+        assert(0);
+    }
+
+    /**
+     * @todo    set the db range keys
+     */
+
+    // open all dbs if the key exists 
+    // meaning the env has already been configured and we might have dbs created
+    create_cursor(&curr, tt);
+    while((rc = mdb_cursor_get(curr, &key, &val, MDB_SET_RANGE)) == 0) {
+        char *dbname;
+        
+        dbname = (char *)key.mv_data;
+        memcpy(&dbMeta, val.mv_data, val.mv_size);
+
+        assert(mdb_dbi_open(tt->txn, db, dbMeta.flags, &dbi) == 0);
+        internal_add_db(&db, dbname, dbi, &dbMeta);
+    }
+
+}
+
+static void internal_create_open_env(struct OpenEnv **oEnv, MDB_env *env) {
+    *oEnv = malloc(sizeof(struct OpenEnv));
+    assert((*oEnv) != NULL);
+
+    (*oEnv)->env = env;
+    init_list(&(*oEnv)->dbs);
+}
+
+/**
+ * @note    this function will need to check if their is room for the desired db size
+ * @todo    make this function better    
+*/
+static int internal_set_env_fields(MDB_env *env, size_t dbsize, unsigned int numdbs, unsigned int numthreads) {
+    if(mdb_env_set_maxdbs(env, dbsize) != 0) {
+        return TRASH_ERROR;
+    }
+    if(mdb_env_set_maxreaders(env, numthreads) != 0) {
+        return TRASH_ERROR;
+    }
+    if(mdb_env_set_mapsize(env, dbsize) != 0) {
+        return TRASH_ERROR;
+    }
     return TRASH_SUCCESS;
 }
 
-int trash_get(TrashTxn *tt, MDB_dbi dbi, MDB_val *key, MDB_val *val) {
+static int db_match(struct OpenDb *db, const char *dbname) {
     int rc;
+    rc = (strcmp(db->name, dbname) == 0) ? TRASH_SUCCESS : TRASH_ERROR;
+    return rc;
+}
+
+/**
+ * @note    this code needs to lock the env before adding the db
+ */
+static void internal_add_db(struct OpenDb **db, const char *dbname, MDB_dbi id, struct DbMeta *meta) {
+    struct OpenDb *db;
+    *db = malloc(sizeof(struct OpenDb));
+    assert(*db != NULL);
+
+    init_il(&(*db)->move);
+
+    (*db)->name = dbname;
+    (*db)->id = id;
+    (*db)->flags = meta->flags;
+
+    (*db)->count = 0;
+    pthread_mutex_init(&(*db)->odbMutex, NULL);
+
+    // append the db to the current open env
+    pthread_rwlock_wrlock(&oEnv->envLock);
+    list_append(&oEnv->dbs.head, &(*db)->move);
+    pthread_rwlock_unlock(&oEnv->envLock);
+}
+
+static void internal_close_db(const char *dbname) {
+
+}
+
+static void internal_begin_txn(TrashTxn **tt, int rdwr) {
+    MDB_env *env;
+    MDB_txn *txn;
+
+    int rc, flags;
+
+    env = get_env();
+    assert(env != NULL);
     
-    rc = mdb_get(tt->txn, dbi, key, val);
-    assert(rc == 0);
+    flags = 0;
+    if(rdwr == TRASH_RD_TXN) {
+        *tt = internal_get_read_txn();
+    } else {
+        rc = mdb_txn_begin(env, NULL, flags, &txn);
+        assert(rc == 0);
 
-    return TRASH_SUCCESS;
-}   
+        internal_create_trash_txn(tt, txn, TRASH_WR_TXN);
+    }
+}
 
-static TrashTxn *internal_get_read_txn(const char *tablename) {
-    struct Readers *rdrs;
-
-    rdrs = internal_get_readers(tablename);
-    if(rdrs == NULL) {
-        internal_create_readers(&rdrs, tablename);
+static TrashTxn *internal_get_read_txn() {
+    TrashTxn *tt;
+    if(rdrPool == NULL) {
+        // the rdr pool should never be NULL unless the calling function is on env set up
+        // in that case return a reader txn
+        MDB_env *env;
+        MDB_txn *txn;
+        
+        env = get_env();
+        // create and rd txn and return
+        mdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
+        internal_create_trash_txn(&tt, txn, TRASH_RD_TXN);
+        return tt;
     }
 
-    TrashTxn *tt;
-
-    rdrs_lock(rdrs);
-    if(rdrs->numTxns == 0) {
-        rdrs_unlock(rdrs);
+    if(rdrPool->numTxns == 0) {
         /**
          * @note    this should never happen
          */
         assert(0);
     } else {
-        tt = rdrs->txns[--rdrs->numTxns];
-        rdrs_unlock(rdrs);
-
-        mdb_txn_renew(tt->txn);
+        tt = rdrPool->txns[--rdrPool->numTxns];
+        assert(mdb_txn_renew(tt->txn) == 0);
     }
 
     return tt;
 }
 
-static void internal_create_trash_txn(TrashTxn **tt, MDB_txn *txn, struct Readers *rdrs) {
+static void internal_create_trash_txn(TrashTxn **tt, MDB_txn *txn, int rdwr) {
+    unsigned int flags = 0;
+
     *tt = (TrashTxn *) malloc(sizeof(tt));
-    if(*tt == NULL) {
-        /**
-         * @todo    handle out of memory error here
-        */
-        exit(1);
-    }
+    assert(*tt != NULL);
 
     (*tt)->txn = txn;
-    (*tt)->rdrs = rdrs;
-    (*tt)->commit = false;
+    (*tt)->db = NULL;
+
+    flags |= rdwr; 
+    (*tt)->flags = flags;
 }
 
-static struct Readers *internal_get_readers(const char *tablename) {
-    struct Readers *rdrs;
-
-    pool_lock(false);
-    HASH_FIND_STR(rdrPool, tablename, rdrs);
-    pool_unlock();
-
-    return rdrs;
-}
-
-static void internal_create_readers(struct Readers **rdrs, const char *tablename) {
+static void internal_create_readers() {
     MDB_env *env;
     
-    *rdrs = (struct Readers *) malloc(sizeof(struct Readers));
-    if(*rdrs == NULL) {
-        /**
-         * @todo    handle error
-        */
-        exit(1);
-    }
+    rdrPool = (struct Readers *) malloc(sizeof(struct Readers));
+    assert(rdrPool != NULL);
 
-    (*rdrs)->tablename = tablename;
-    (*rdrs)->numTxns = TXN_POOL_CAPACITY;
+    rdrPool->numTxns = TXN_POOL_CAPACITY;
 
-    env = get_env(tablename);
+    env = get_env();
 
     for (size_t i = 0; i < TXN_POOL_CAPACITY; i++)
     {
@@ -217,49 +569,10 @@ static void internal_create_readers(struct Readers **rdrs, const char *tablename
         /**
          * @todo    build an error handling function for lmdb error messages
         */
-        mdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
+        assert(mdb_txn_begin(env, NULL, MDB_RDONLY, &txn) == 0);
         mdb_txn_reset(txn);
-        internal_create_trash_txn(&tt, txn, *rdrs);
+        internal_create_trash_txn(&tt, txn, 1);
 
-        (*rdrs)->txns[i] = tt;
+        rdrPool->txns[i] = tt;
     }
-
-    pool_lock(true);
-    HASH_ADD_STR(rdrPool, tablename, *rdrs);
-    pool_unlock();
 }
-
-
-static void rdrs_lock(struct Readers *rdrs) {
-    #ifdef NOTLS
-    pthread_spin_lock(&rdrs->spinner);
-    #endif
-}
-
-static void rdrs_unlock(struct Readers *rdrs) {
-    #ifdef NOTLS
-    pthread_spin_unlock(&rdrs->spinner);
-    #endif
-}
-
-static void pool_lock(bool write) {
-    #ifdef NOTLS
-    if(write) {
-        pthread_rwlock_wrlock(&rdrPoolLock);
-    } else {
-        pthread_rwlock_rdlock(&rdrPoolLock);
-    }
-    #endif
-};
-
-static void pool_unlock() {
-    #ifdef NOTLS
-    pthread_rwlock_unlock(&rdrPoolLock);
-    #endif
-};
-
-#ifdef DEBUG
-MDB_txn *get_trash_txn(TrashTxn *tt) {
-    return tt->txn;
-}
-#endif

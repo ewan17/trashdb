@@ -2,119 +2,90 @@
 
 #include "trashnet.h"
 
-static int init_message(Message *message, uint32_t dispatchSize);
-static void reset_message(Message *message);
-static void resize_message(Message *message, uint32_t size);
+static void reset_tbuff(TBuffer *tBuff);
+static void resize_tbuff(TBuffer *tBuff, uint32_t size);
 
-int build_message(Message *message) {
-    if(message == NULL) {
-        return TRASH_ERROR;
+void init_tbuff(TBuffer *tBuff, uint32_t size) {
+    reset_tbuff(tBuff);
+
+    if(size > DEFAULT_TBUFF_SIZE) {
+        size = DEFAULT_TBUFF_SIZE;
     }
+    tBuff->data = (char *) malloc(sizeof(char) * size);
+    assert(tBuff->data != NULL);
 
-    int rc;
-    rc = init_message(message, DEFAULT_DISPATCH_SIZE);
-    return rc;
+    tBuff->capacity = size;
 }
 
-void dispatch_message(SendBuff *sendBuff) {
-    
-}
-
-void kill_message(Message *message) {
-    if(message != NULL) {
-        free(message->data);
-        free(message);
+void kill_tbuffer(TBuffer *tBuff) {
+    if(tBuff != NULL) {
+        free(tBuff->data);
+        free(tBuff);
     }
 }
 
-/**
- * @todo    fix this function
-*/
-void dispatch_message(Message *message) {
-    // move data to send buff
-    // create event
-
-    free(message->data);
-    message->data = NULL;
-}
-
-void add_byte_to_message(Message *message, const char data) {
-    if(message == NULL) {
+void add_byte_to_tbuffer(TBuffer *tBuff, const char data) {
+    if(tBuff == NULL) {
         return;
     }
 
-    resize_message(message, 1);
+    resize_tbuff(tBuff, 1);
 
-    message->data[message->end] = data;
-    message->end++;
+    tBuff->data[tBuff->end] = data;
+    tBuff->end++;
 
-    message->data[message->end] = '\0';
+    tBuff->data[tBuff->end] = '\0';
 }
 
-void add_bytes_to_message(Message *message, const char *data, uint32_t dataLen) {
-    if(message == NULL) {
+void add_bytes_to_tbuffer(TBuffer *tBuff, const char *data, uint32_t dataLen) {
+    if(tBuff == NULL) {
         return;
     }
 
-    resize_message(message, dataLen);
+    resize_tbuff(tBuff, dataLen);
 
-    memcpy(message->data + message->end, data, dataLen);
-    message->end += dataLen;
+    memcpy(tBuff->data + tBuff->end, data, dataLen);
+    tBuff->end += dataLen;
 
-    message->data[message->end] = '\0';
+    tBuff->data[tBuff->end] = '\0';
 }
 
-int get_byte_from_message(Message *message, int *byte, bool peek) {
-    if(message == NULL || (message->start == message->end)) {
+int get_byte_from_tbuffer(TBuffer *tBuff, int *byte, bool peek) {
+    if(tBuff == NULL || (tBuff->start == tBuff->end)) {
         return TRASH_ERROR;
     }
 
-    uint32_t startPtr = message->start;
+    uint32_t startPtr = tBuff->start;
     if(!peek) {
-        message->start++;
+        tBuff->start++;
     }
 
-    *byte = (unsigned char) message->data[startPtr];
+    *byte = (unsigned char) tBuff->data[startPtr];
 
     return TRASH_SUCCESS;
 }
 
-static void reset_message(Message *message) {
-    message->start = message->end = 0;
-}
-
-static int init_message(Message *message, uint32_t dispatchSize) {
-    reset_message(message);
-
-    if(dispatchSize > DEFAULT_DISPATCH_SIZE) {
-        dispatchSize = DEFAULT_DISPATCH_SIZE;
-    }
-    message->data = (char *) malloc(sizeof(char) * dispatchSize);
-    if(message->data == NULL) {
-        return TRASH_ERROR;
-    }
-
-    message->capacity = dispatchSize;
-    return TRASH_SUCCESS;
+static void reset_tbuff(TBuffer *tBuff) {
+    tBuff->start = tBuff->end = 0;
 }
 
 /**
  * @note    this function may need to realloc to a larger size
 */
-static void resize_message(Message *message, uint32_t size) {
-    if(message->end >= (UINT32_MAX - size)) {
+static void resize_tbuff(TBuffer *tBuff, uint32_t size) {
+    if(tBuff->end >= (UINT32_MAX - size)) {
         goto error;
     }
 
     // +1 for the null byte
-    uint16_t availSpace = message->capacity - (message->end + 1); 
+    uint16_t availSpace = tBuff->capacity - (tBuff->end + 1); 
 
     if(size > availSpace) {
-        if(message->capacity == UINT32_MAX) {
+        if(tBuff->capacity == UINT32_MAX) {
             goto error;
         }
 
-        size_t needed = message->capacity * 2;
+        size_t needed = tBuff->capacity * 2;
         while(needed < size) {
             needed = needed * 2;
         }
@@ -123,11 +94,11 @@ static void resize_message(Message *message, uint32_t size) {
             needed = UINT32_MAX;
         }
 
-        message->data = trash_realloc(message->data, needed);
-        if(message->data == NULL) {
+        tBuff->data = trash_realloc(tBuff->data, needed);
+        if(tBuff->data == NULL) {
             goto error;
         }
-        message->capacity = needed;
+        tBuff->capacity = needed;
     }
 
     return;
@@ -137,6 +108,5 @@ error:
      * @todo    add some sort of error handling here for invalid realloc or for a resize limit
      * @note    the code below should be changed
     */
-    printf("error resizing message\n");
-    exit(1);
+    assert(0);
 }

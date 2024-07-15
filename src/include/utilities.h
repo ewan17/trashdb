@@ -15,6 +15,8 @@
 
 void *trash_realloc(void *sendBuff, size_t needed);
 
+int validate_filename(const char *filename);
+
 int trash_mkdir(const char *path, size_t len, mode_t mode);
 
 bool sock_buff_size(int sock, int send_buffy_size, int recv_buffy_size);
@@ -32,6 +34,11 @@ void set_unix_trash_addr(struct TrashAddr *taddr, const char *path);
 void set_ip_trash_addr(struct TrashAddr *taddr, const struct sockaddr *addr, sa_family_t sockFam);
 const char *parse_sock_addr(struct sockaddr *addr);
 
+
+/**
+ * @todo    need to remove everything below here
+ * @note    has been replaced by il.h file
+ */
 struct IList {
     struct IList *next;
     struct IList *prev;

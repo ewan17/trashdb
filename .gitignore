@@ -1,9 +1,12 @@
+.vscode/
 test/
 lib/
 playground/
-
 build/
 
 *.mdb
+*.tab.[ch]
+*.[ao]
+*.out
 
 .vscode/
