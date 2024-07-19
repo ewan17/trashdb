@@ -1,8 +1,7 @@
 .vscode/
-test/
-lib/
 playground/
 build/
+parser/
 
 *.mdb
 *.tab.[ch]
