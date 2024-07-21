@@ -4,6 +4,7 @@
 #include "global.h"
 
 #include "lmdb.h"
+#include "cook.h"
 #include "db.h"
 #include "pool.h"
 
@@ -19,7 +20,7 @@ extern TPool *tp;
 #define DB_SIZE 10485760
 // this is set to default readers for now
 /**
- * 
+ * @note    
  */
 #define MAX_READERS 126
 #define NUM_DBS 50

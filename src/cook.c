@@ -55,7 +55,38 @@ void init_thread_groups() {
     }
 }
 
-void cook_func(void *arg) {
+/**
+ * @todo    needs to accept a struct arg
+ */
+void scheduler() {
+    Work *work;
+    IL *il;
+    struct CGrps *cg;
+    int rc;
+
+    init_work(&work);
+    /**
+     * @todo    add arg
+     */
+    add_work(work, cook_func, NULL);
+    
+    for (size_t i = 0; i < rdrs.len; i++)
+    {
+        il = list_rotate(&rdrs);
+        cg = CONTAINER_OF(il, struct CGrps, move);
+
+        rc = do_work(cg->tg, work);
+        assert(rc != POOL_ERROR);
+
+        if(rc != GROUP_FULL) {
+            break;
+        }
+    }
+}
+
+static void cook_func(void *arg) {
     // setup the reader txns for the thread
     init_thread_local_readers();
+
+    // parse the message
 }

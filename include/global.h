@@ -9,13 +9,17 @@
 #include <stdbool.h>
 #include <assert.h>
 #include <stdio.h>
+#include <time.h>
 #include <errno.h>
 
 #include "utilities.h"
 #include "il.h"
+#include "logger.h"
 
 #define TRASH_SUCCESS (0)
 #define TRASH_ERROR (-1)
 #define TRASH_EOF (-2)
+
+extern char *logFile;
 
 #endif //GLOBAL_H
