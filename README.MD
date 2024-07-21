@@ -1,3 +1,0 @@
-# TrashDB
-
-Literally trash...
