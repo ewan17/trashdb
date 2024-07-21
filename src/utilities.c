@@ -113,8 +113,15 @@ int trash_mkdir(const char *path, size_t len, mode_t mode) {
             holder[i] = '/';
         }
     }
-
     return 0;
+}
+
+int trash_no_file_dir(const char *filepath) {
+    int rc;
+    
+    size_t len = strlen(filepath);
+    rc = trash_mkdir(filepath, len, 0755);
+    return rc;
 }
 
 bool sock_buff_size(int sock, int send_buffy_size, int recv_buffy_size) {

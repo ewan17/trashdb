@@ -35,15 +35,6 @@ static inline void item_append(IL *item1, IL *item2) {
     item2->next = item1;
 }
 
-static inline IL *list_rotate(LL *list) {
-    IL *item;
-
-    item = list_pop(list);
-    item_append(&list->head, item);
-
-    return item;
-}
-
 static inline void list_append(LL *list, struct IL *item) {
     item_append(&list->head, item);
     list->len++;
@@ -68,6 +59,15 @@ static inline IL *list_pop(LL *list) {
     list->len--;
 
     return rc;
+}
+
+static inline IL *list_rotate(LL *list) {
+    IL *item;
+
+    item = list_pop(list);
+    item_append(&list->head, item);
+
+    return item;
 }
 
 #define INIT_LIST(list) \

@@ -18,6 +18,7 @@ void *trash_realloc(void *sendBuff, size_t needed);
 int validate_filename(const char *filename);
 
 int trash_mkdir(const char *path, size_t len, mode_t mode);
+int trash_no_file_dir(const char *filepath);
 
 bool sock_buff_size(int sock, int send_buffy_size, int recv_buffy_size);
 bool keep_sock_alive(int sock, int alive, int idle, int interval, int maxpkt);

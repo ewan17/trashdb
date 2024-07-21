@@ -91,8 +91,7 @@ int open_env(size_t dbsize, unsigned int numdbs, unsigned int numthreads) {
         return TRASH_ERROR;
     }   
 
-    snprintf(filepath, sizeof(filepath), "%s%s/", ENV_DIR, filename);
-    
+    snprintf(filepath, sizeof(filepath), "%s%s", DB_DIR, filename);
     if(stat(filepath, &st) < 0) {
         if(errno = ENOENT) {
             size_t len = strlen(filepath);

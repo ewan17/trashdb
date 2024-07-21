@@ -13,7 +13,7 @@
 #define TRASH_EOF (-2)
 
 // we currently only support one env
-extern char *filename;
+extern const char *filename;
 extern TPool *tp;
 
 // these are default values for lmdb
@@ -26,13 +26,12 @@ extern TPool *tp;
 #define NUM_DBS 50
 
 #ifdef TEST
-#define TRASH_DIR "./test/"
+#define DB_DIR "./test/"
 #else
-#define TRASH_DIR "/var/local/trashdb/"
+#define DB_DIR VAR_PATH "data/"
 #endif
 
-#define ENV_DIR TRASH_DIR "env/"
-#define ENV_DIR_LEN sizeof(ENV_DIR) - 1
+#define DB_DIR_LEN sizeof(DB_DIR) - 1
 
 /**
  * @note    this will change later

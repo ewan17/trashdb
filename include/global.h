@@ -16,10 +16,13 @@
 #include "il.h"
 #include "logger.h"
 
+#define VAR_PATH "/var/local/trashdb/"
+
 #define TRASH_SUCCESS (0)
 #define TRASH_ERROR (-1)
 #define TRASH_EOF (-2)
 
-extern char *logFile;
+extern const char *logFile;
+extern int logFileLen;
 
 #endif //GLOBAL_H

@@ -1,6 +1,6 @@
 #include "trashdb.h"
 
-char *filename = "bruh";
+const char *filename = "bruh";
 
 void big_test() {
     TrashTxn *tt;
@@ -165,7 +165,7 @@ void tls_single() {
 // }
 
 int main(int argc, char *argv[]) {    
-    assert(trash_mkdir(ENV_DIR, ENV_DIR_LEN, 0755) == 0);
+    assert(trash_mkdir(DB_DIR, DB_DIR_LEN, 0755) == 0);
     assert(open_env(DB_SIZE, NUM_DBS, 1) == 0);
 
     // big_test();

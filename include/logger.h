@@ -4,9 +4,12 @@
 #define LOG_ERROR TRASH_ERROR
 #define LOGGED TRASH_SUCCESS
 
-#define LOG(level, message) do { \
+/**
+ * @todo    add additional args so we can format the message
+ */
+#define TRASH_LOG(level, message) do { \
     int rc; \
-    rc = log(__FILE__, __LINE__, message, level); \
+    rc = trash_log(level, __FILE__, __LINE__, message); \
     assert(rc == 0); \
 } while(0)
 
@@ -19,9 +22,9 @@ typedef enum {
 
 typedef struct Logger Logger;
 
-void init_logger();
+int init_logger();
 void close_logger();
 
-int log(const char *file, int line, const char *message, LEVEL level);
+int trash_log(LEVEL level, const char *file, int line, const char *message);
 
 #endif //LOGGER_H
