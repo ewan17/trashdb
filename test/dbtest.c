@@ -2,33 +2,80 @@
 
 char *filename = "bruh";
 
-// MDB_dbi testDbi;
+void big_test() {
+    TrashTxn *tt;
+    MDB_val key,val;
+    char result[256];
+    int rc;
 
-// void begin_write_txn_test() {
-//     TrashTxn *tt;
-//     MDB_txn *txn = NULL;
-//     int rc;
+    rc = begin_txn(&tt, "test", TRASH_WR_TXN);
+    assert(rc == DB_DNE);
 
-//     tt = begin_txn(tableName, NULL, true);
+    open_db(tt, "test", MDB_CREATE);
 
-//     assert(tt != NULL);
+    rc = trash_put(tt, "testkey", 7, "testval", 7, 0);
+    assert(rc == TRASH_SUCCESS);
+
+    key.mv_data = "testkey";
+    key.mv_size = 7;
+    rc = mdb_get(tt->txn, tt->db->id, &key, &val);
+    assert(rc == 0);
     
-//     #ifdef TEST
-//     txn = get_trash_txn(tt);
-//     #endif
+    return_txn(tt);
 
-//     assert(txn != NULL);
+    memcpy(result, val.mv_data, val.mv_size);
+    result[val.mv_size] = '\0';
+    rc = strcmp("testval", result);
+    assert(rc == 0);
 
-//     MDB_val keyP, dataP;
-//     dataP.mv_data = "testy";
-//     dataP.mv_size = strlen("testy");
-//     keyP.mv_size = strlen("testkey");
-//     keyP.mv_data = (void *)"testkey";
+    rc = begin_txn(&tt, "test", TRASH_WR_TXN);
+    assert(rc == 0);
+
+    // opening an existing db
+    open_db(tt, "test", MDB_CREATE);
+    rc = change_txn_db(tt, METADATA);
+    assert(rc == 0);
+    rc = strcmp(METADATA, tt->db->name);
+    assert(rc == 0);
+
+    rc = change_txn_db(tt, "not_db");
+    assert(rc == DB_DNE);
+}
+
+void tls_single() {
+    TrashTxn *tt;
+    MDB_val key,val;
+    // just so I do not have to malloc
+    char tlsResult[256];
+    int rc;
+
+    init_thread_local_readers();
+
+    rc = begin_txn(&tt, "test", TRASH_WR_TXN);
+    assert(rc == DB_DNE);
+
+    open_db(tt, "test", MDB_CREATE);
+
+    rc = trash_put(tt, "testkey", 7, "testval", 7, 0);
+    assert(rc == TRASH_SUCCESS);
+
+    return_txn(tt);
+
+    rc = begin_txn(&tt, "test", TRASH_RD_TXN);
+    assert(rc != DB_DNE);
+
+    key.mv_data = "testkey";
+    key.mv_size = 7;
+    rc = mdb_get(tt->txn, tt->db->id, &key, &val);
+    assert(rc == 0);
     
-//     assert(mdb_put(txn, testDbi, &keyP, &dataP, 0) == 0);
+    return_txn(tt);
 
-//     mdb_txn_abort(txn);
-// }
+    memcpy(tlsResult, val.mv_data, val.mv_size);
+    tlsResult[val.mv_size] = '\0';
+    rc = strcmp("testval", tlsResult);
+    assert(rc == 0);
+}
 
 // void begin_read_txn_test() {
 //     TrashTxn *tt;
@@ -120,6 +167,9 @@ char *filename = "bruh";
 int main(int argc, char *argv[]) {    
     assert(trash_mkdir(ENV_DIR, ENV_DIR_LEN, 0755) == 0);
     assert(open_env(DB_SIZE, NUM_DBS, 1) == 0);
+
+    // big_test();
+    tls_single();
 
     return 0;
 }

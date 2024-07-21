@@ -13,12 +13,15 @@
 
 // we currently only support one env
 extern char *filename;
-extern unsigned int workerThreads;
+extern TPool *tp;
 
 // these are default values for lmdb
 #define DB_SIZE 10485760
-// this should be the number of threads that we have running
-#define MAX_READERS workerThreads
+// this is set to default readers for now
+/**
+ * 
+ */
+#define MAX_READERS 126
 #define NUM_DBS 50
 
 #ifdef TEST

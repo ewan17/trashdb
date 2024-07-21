@@ -779,5 +779,5 @@ static int q_full(struct Q *q) {
 }
 
 static int q_empty(struct Q *q) {
-    return empty(&q->work);
+    return empty_list(&q->work);
 }
